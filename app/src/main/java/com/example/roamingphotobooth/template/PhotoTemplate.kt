@@ -11,7 +11,11 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class PhotoSlot(
     val id: String,           // unik per slot, misal "slot_1"
-    val order: Int,           // urutan pengambilan foto (1, 2, 3, ...)
+    // Urutan pengambilan foto (1, 2, 3, ...). CATATAN: dua slot boleh punya `order` yang
+    // SAMA — ini dasar fitur "duplikat slot": TemplateSessionManager menyimpan foto per
+    // `order` (bukan per slot id), jadi semua slot dengan `order` sama otomatis diisi
+    // 1 foto yang sama saat sesi pemotretan berjalan.
+    val order: Int,
     val xRatio: Float,        // posisi X kiri-atas, 0.0 = paling kiri, 1.0 = paling kanan
     val yRatio: Float,        // posisi Y kiri-atas, 0.0 = paling atas, 1.0 = paling bawah
     val widthRatio: Float,    // lebar slot, relatif terhadap lebar bingkai

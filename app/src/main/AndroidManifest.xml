@@ -38,8 +38,10 @@
 
         <activity
             android:name=".template.TemplateEditorActivity"
+            android:screenOrientation="landscape"
             android:exported="false"
-            android:label="Pengaturan Bingkai" />
+            android:label="Pengaturan Bingkai"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 
 </manifest>

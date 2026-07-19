@@ -9,20 +9,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 
 class TemplateEditorActivity : ComponentActivity() {
@@ -58,25 +52,19 @@ class TemplateEditorActivity : ComponentActivity() {
         }
 
         if (showEditor) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Button(onClick = { pickImageLauncher.launch("image/png") }) {
-                    Text("Pilih File Bingkai PNG")
+            // TemplateEditorScreen sudah mengurus seluruh layout (workspace + panel
+            // kontrol, termasuk tombol pilih/ganti bingkai) — selalu tampil landscape
+            // penuh layar (dipaksa lewat AndroidManifest), tanpa Column pembungkus lagi.
+            TemplateEditorScreen(
+                viewModel = viewModel,
+                onPickFrameClick = { pickImageLauncher.launch("image/png") },
+                onSaveClick = {
+                    saveTemplate()
+                    templates = templateStorage.loadAllTemplates()
+                    showEditor = false
+                    viewModel.reset()
                 }
-
-                if (viewModel.framePath.value != null) {
-                    TemplateEditorScreen(
-                        viewModel = viewModel,
-                        onSaveClick = {
-                            saveTemplate()
-                            templates = templateStorage.loadAllTemplates()
-                            showEditor = false
-                            viewModel.reset()
-                        }
-                    )
-                } else {
-                    Text("Belum ada bingkai dipilih. Klik tombol di atas untuk mulai.")
-                }
-            }
+            )
         } else {
             TemplateListScreen(
                 templates = templates,
