@@ -33,6 +33,12 @@ import com.example.roamingphotobooth.ui.FinalResultScreen
  * Live view di sini FULL SCREEN (bukan split) dengan frame PNG yang lagi
  * dipilih di-overlay pas di atasnya — supaya user langsung lihat framing-nya
  * pas motret.
+ *
+ * Sesi berikutnya bisa dipicu 2 cara begitu layar hasil akhir (FinalResultScreen)
+ * tampil: (1) tap tombol "Lanjut" di layar, ATAU (2) jepret kamera fisik sekali
+ * lagi — foto hasil jepretan itu otomatis dibuang (cuma dipakai sebagai sinyal
+ * "mulai sesi baru", bukan foto pertama sesi berikutnya). Logic-nya ada di
+ * MainActivity.onNewPhotoCaptured, bukan di sini.
  */
 @Composable
 fun MobileBoothScreen(
@@ -40,6 +46,7 @@ fun MobileBoothScreen(
     liveViewBitmap: Bitmap?,
     frameOverlayBitmap: Bitmap?,
     finalResultBitmap: Bitmap?,
+    qrCodeBitmap: Bitmap?,
     onBackClick: () -> Unit,
     onContinueClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -48,9 +55,10 @@ fun MobileBoothScreen(
         modifier = Modifier.fillMaxSize()
     ) {
         if (finalResultBitmap != null) {
-            // Sesi SELESAI: layar penuh nampilin hasil akhir + tombol lanjut.
+            // Sesi SELESAI: layar penuh nampilin hasil akhir + QR + tombol lanjut.
             FinalResultScreen(
                 resultBitmap = finalResultBitmap,
+                qrCodeBitmap = qrCodeBitmap,
                 onContinueClick = onContinueClick
             )
         } else {

@@ -50,6 +50,7 @@ fun StandBoothScreen(
     liveViewBitmap: Bitmap?,
     previewBitmap: Bitmap?,
     finalResultBitmap: Bitmap?,
+    qrCodeBitmap: Bitmap?,
     countdownValue: Int?,
     isCapturing: Boolean,
     isProcessing: Boolean,
@@ -67,9 +68,10 @@ fun StandBoothScreen(
     ) {
         when {
             finalResultBitmap != null -> {
-                // Sesi SELESAI: layar penuh nampilin hasil akhir + tombol lanjut.
+                // Sesi SELESAI: layar penuh nampilin hasil akhir + QR + tombol lanjut.
                 FinalResultScreen(
                     resultBitmap = finalResultBitmap,
+                    qrCodeBitmap = qrCodeBitmap,
                     onContinueClick = onContinueClick
                 )
             }

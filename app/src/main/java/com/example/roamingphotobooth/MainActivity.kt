@@ -62,6 +62,11 @@ class MainActivity : ComponentActivity() {
     // menekan lanjut (yang akan reset sesi & bikin field ini balik jadi null).
     private var finalResultBitmap = mutableStateOf<Bitmap?>(null)
 
+    // QR code buat scan/download foto dari Drive — muncul di layar hasil akhir
+    // (FinalResultScreen) begitu upload ke Drive selesai. Null selama upload masih
+    // jalan di background (layar nampilin status "menyiapkan QR" sampai ini terisi).
+    private var qrCodeBitmap = mutableStateOf<Bitmap?>(null)
+
     private var activeTemplate = mutableStateOf<com.example.roamingphotobooth.template.PhotoTemplate?>(null)
     private var templateSession: com.example.roamingphotobooth.template.TemplateSessionManager? = null
     private lateinit var templateStorage: com.example.roamingphotobooth.template.TemplateStorage
@@ -165,6 +170,7 @@ class MainActivity : ComponentActivity() {
                             liveViewBitmap = liveViewBitmap.value,
                             frameOverlayBitmap = frameOverlayBitmap.value,
                             finalResultBitmap = finalResultBitmap.value,
+                            qrCodeBitmap = qrCodeBitmap.value,
                             onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
                             onContinueClick = { startNewSession() },
                             onSettingsClick = {
@@ -179,6 +185,7 @@ class MainActivity : ComponentActivity() {
                             liveViewBitmap = liveViewBitmap.value,
                             previewBitmap = previewBitmap.value,
                             finalResultBitmap = finalResultBitmap.value,
+                            qrCodeBitmap = qrCodeBitmap.value,
                             countdownValue = standCountdownValue.value,
                             isCapturing = standIsCapturing.value,
                             isProcessing = standIsProcessing.value,
@@ -232,6 +239,7 @@ class MainActivity : ComponentActivity() {
         val frameBmp = frameFileManager.loadBitmap(template.framePngPath)
         frameOverlayBitmap.value = frameBmp
         finalResultBitmap.value = null
+        qrCodeBitmap.value = null
         refreshPreview()
 
         statusText.value = "Template '${template.name}' aktif (${template.slotCount} slot foto)"
@@ -259,6 +267,7 @@ class MainActivity : ComponentActivity() {
     private fun startNewSession() {
         templateSession?.reset()
         finalResultBitmap.value = null
+        qrCodeBitmap.value = null
         refreshPreview()
         statusText.value = activeTemplate.value?.let {
             "Template '${it.name}' aktif (${it.slotCount} slot foto)"
@@ -367,6 +376,7 @@ class MainActivity : ComponentActivity() {
                 if (previewImage != null) previewBitmap.value = previewImage
                 if (finalImage != null) {
                     statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedName"
+                    qrCodeBitmap.value = null // QR lama (kalau ada) di-clear, nunggu upload baru selesai
                     finalResultBitmap.value = finalImage
                 }
                 standIsProcessing.value = false
@@ -411,10 +421,16 @@ class MainActivity : ComponentActivity() {
     private fun uploadToDriveAsync(fileName: String, jpegBytes: ByteArray) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val fileId = driveUploader.uploadBytes(fileName, jpegBytes)
-                Log.i("DriveUpload", "Sukses upload $fileName -> fileId=$fileId")
+                val result = driveUploader.uploadBytes(fileName, jpegBytes)
+                Log.i("DriveUpload", "Sukses upload $fileName -> fileId=${result.fileId}")
+
+                // Begitu tersimpan lokal + terupload ke Drive, langsung generate QR dari
+                // link Drive-nya supaya user bisa scan & download fotonya sendiri di HP.
+                val qr = com.example.roamingphotobooth.util.QrCodeGenerator.generate(result.shareUrl)
+
                 withContext(Dispatchers.Main) {
                     statusText.value = "✅ Tersimpan & terupload ke Drive: $fileName"
+                    qrCodeBitmap.value = qr
                 }
             } catch (e: Exception) {
                 Log.e("DriveUpload", "Gagal upload $fileName", e)
@@ -483,6 +499,19 @@ class MainActivity : ComponentActivity() {
         }
 
         session.onNewPhotoCaptured = merge@{ photoBytes ->
+            // MOBILE + lagi nampilin layar hasil akhir (sesi sebelumnya sudah kelar,
+            // nunggu user "Lanjut"): jepretan baru dari kamera fisik di-anggap SINYAL
+            // "mulai sesi baru" doang, bukan foto pertama sesi berikutnya — jadi foto
+            // hasil jepretan ini DIBUANG (cuma dipakai buat trigger, tidak disimpan/
+            // di-upload) dan langsung reset sesi + balik ke live view.
+            if (boothMode.value == BoothMode.MOBILE && finalResultBitmap.value != null) {
+                runOnUiThread {
+                    statusText.value = "📸 Terdeteksi jepretan baru → mulai sesi baru..."
+                    startNewSession()
+                }
+                return@merge
+            }
+
             // Kalau lagi nunggu 1 foto buat layar review Stand (abis shutter software
             // ditembak), arahkan ke situ dan JANGAN auto-commit ke slot template dulu.
             val standCallback = pendingStandCaptureCallback
@@ -524,6 +553,7 @@ class MainActivity : ComponentActivity() {
                         val savedUri = saveMergedBitmap(finalImage)
                         runOnUiThread {
                             statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedUri"
+                            qrCodeBitmap.value = null // QR lama (kalau ada) di-clear, nunggu upload baru selesai
                             finalResultBitmap.value = finalImage
                         }
                         // Sesi TIDAK di-reset di sini — nunggu user tekan tombol "Lanjut"
