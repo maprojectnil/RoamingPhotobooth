@@ -43,10 +43,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceManager: PtpDeviceManager
     private var sessionManager: PtpSessionManager? = null
 
-    // Client Drive: dipakai buat upload otomatis foto hasil ke Google Drive
-    // begitu foto selesai disimpan lokal. Diinisialisasi di onCreate().
-    private lateinit var driveUploader: com.example.roamingphotobooth.drive.DriveUploader
-
     // GUARD: cegah multiple sesi berjalan bersamaan ke device yang sama
     private var isConnecting = false
 
@@ -141,17 +137,10 @@ class MainActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        // Setup client upload Drive (OAuth refresh token, atas nama akun Gmail asli
-        // supaya kuota penyimpanan ikut akun itu, bukan Service Account).
-        val driveAuth = com.example.roamingphotobooth.drive.DriveAuth(
-            clientId = BuildConfig.DRIVE_OAUTH_CLIENT_ID,
-            clientSecret = BuildConfig.DRIVE_OAUTH_CLIENT_SECRET,
-            refreshToken = BuildConfig.DRIVE_OAUTH_REFRESH_TOKEN
-        )
-        driveUploader = com.example.roamingphotobooth.drive.DriveUploader(
-            driveAuth,
-            BuildConfig.DRIVE_FOLDER_ID
-        )
+        // Catatan: upload ke Drive TIDAK lagi disiapkan di sini. DriveAuth/DriveUploader
+        // sekarang diinisialisasi di dalam DriveUploadWorker (lihat package .work),
+        // supaya upload berjalan sebagai background WorkManager job yang bisa
+        // di-retry otomatis meski Activity ini sudah tidak hidup.
 
         // Load frame PNG sekali di awal
         frameOverlayBitmap.value = loadFrameFromAssets("wedding.png")
@@ -402,7 +391,8 @@ class MainActivity : ComponentActivity() {
                 if (previewImage != null) previewBitmap.value = previewImage
                 if (finalImage != null) {
                     statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedName"
-                    qrCodeBitmap.value = null // QR lama (kalau ada) di-clear, nunggu upload baru selesai
+                    // QR sudah di-set instan di dalam saveMergedBitmap() di atas -- JANGAN
+                    // di-null-kan lagi di sini, nanti nimpa QR yang baru saja muncul.
                     finalResultBitmap.value = finalImage
                 }
                 standIsProcessing.value = false
@@ -438,33 +428,55 @@ class MainActivity : ComponentActivity() {
         val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
         uri?.let { contentResolver.openOutputStream(it)?.use { out -> out.write(jpegBytes) } }
 
-        // upload ke Drive di background, tidak nge-block UI/capture berikutnya
-        uploadToDriveAsync(fileName, jpegBytes)
+        // Slug + QR dibuat 100% LOKAL, instan, tidak nunggu upload apapun.
+        // QR nunjuk ke landing page kita sendiri (bukan langsung ke Drive), yang
+        // nge-track status foto ini secara realtime lewat Firestore.
+        val slug = com.example.roamingphotobooth.status.SlugGenerator.newSlug()
+        val landingUrl = com.example.roamingphotobooth.status.SlugGenerator.landingUrl(
+            BuildConfig.LANDING_BASE_URL, slug
+        )
+        val qr = com.example.roamingphotobooth.util.QrCodeGenerator.generate(landingUrl)
+        runOnUiThread {
+            qrCodeBitmap.value = qr
+            statusText.value = "✅ Tersimpan: $fileName — mengunggah ke Drive di latar belakang..."
+        }
+
+        // Simpan JPEG ke cache privat app (bukan cuma MediaStore) supaya WorkManager
+        // masih bisa baca file-nya sekalipun proses ini mati & di-restart oleh OS
+        // di tengah upload/retry.
+        val cacheFile = java.io.File(cacheDir, "upload_$slug.jpg")
+        cacheFile.writeBytes(jpegBytes)
+
+        enqueueDriveUpload(slug, fileName, cacheFile.absolutePath)
 
         return fileName
     }
 
-    private fun uploadToDriveAsync(fileName: String, jpegBytes: ByteArray) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val result = driveUploader.uploadBytes(fileName, jpegBytes)
-                Log.i("DriveUpload", "Sukses upload $fileName -> fileId=${result.fileId}")
+    /**
+     * Enqueue job upload ke Drive lewat WorkManager: retry otomatis dengan
+     * backoff eksponensial, dan nunggu sampai ada koneksi internet kalau lagi
+     * offline (constraint NetworkType.CONNECTED) -- tidak perlu polling manual.
+     * unique work key = slug, supaya foto yang sama tidak ke-enqueue dobel.
+     */
+    private fun enqueueDriveUpload(slug: String, fileName: String, filePath: String) {
+        val constraints = androidx.work.Constraints.Builder()
+            .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+            .build()
 
-                // Begitu tersimpan lokal + terupload ke Drive, langsung generate QR dari
-                // link Drive-nya supaya user bisa scan & download fotonya sendiri di HP.
-                val qr = com.example.roamingphotobooth.util.QrCodeGenerator.generate(result.shareUrl)
+        val request = androidx.work.OneTimeWorkRequestBuilder<com.example.roamingphotobooth.work.DriveUploadWorker>()
+            .setConstraints(constraints)
+            .setBackoffCriteria(
+                androidx.work.BackoffPolicy.EXPONENTIAL,
+                androidx.work.WorkRequest.MIN_BACKOFF_MILLIS,
+                java.util.concurrent.TimeUnit.MILLISECONDS
+            )
+            .setInputData(
+                com.example.roamingphotobooth.work.buildUploadInputData(slug, fileName, filePath)
+            )
+            .build()
 
-                withContext(Dispatchers.Main) {
-                    statusText.value = "✅ Tersimpan & terupload ke Drive: $fileName"
-                    qrCodeBitmap.value = qr
-                }
-            } catch (e: Exception) {
-                Log.e("DriveUpload", "Gagal upload $fileName", e)
-                withContext(Dispatchers.Main) {
-                    statusText.value = "⚠️ Tersimpan lokal, gagal upload ke Drive: ${e.message}"
-                }
-            }
-        }
+        androidx.work.WorkManager.getInstance(applicationContext)
+            .enqueueUniqueWork(slug, androidx.work.ExistingWorkPolicy.KEEP, request)
     }
 
     private fun loadFrameFromAssets(fileName: String): Bitmap? {
@@ -581,7 +593,8 @@ class MainActivity : ComponentActivity() {
                         val savedUri = saveMergedBitmap(finalImage)
                         runOnUiThread {
                             statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedUri"
-                            qrCodeBitmap.value = null // QR lama (kalau ada) di-clear, nunggu upload baru selesai
+                            // QR sudah di-set instan di dalam saveMergedBitmap() di atas -- JANGAN
+                            // di-null-kan lagi di sini, nanti nimpa QR yang baru saja muncul.
                             finalResultBitmap.value = finalImage
                         }
                         // Sesi TIDAK di-reset di sini — nunggu user tekan tombol "Lanjut"

@@ -37,6 +37,20 @@ android {
             "String", "DRIVE_OAUTH_REFRESH_TOKEN",
             "\"${project.findProperty("DRIVE_OAUTH_REFRESH_TOKEN") ?: ""}\""
         )
+        buildConfigField(
+            "String", "FIRESTORE_PROJECT_ID",
+            "\"${project.findProperty("FIRESTORE_PROJECT_ID") ?: ""}\""
+        )
+        buildConfigField(
+            "String", "FIREBASE_WEB_API_KEY",
+            "\"${project.findProperty("FIREBASE_WEB_API_KEY") ?: ""}\""
+        )
+        buildConfigField(
+            // Base URL landing page di Firebase Hosting, TANPA trailing slash.
+            // Contoh: https://roaming-photobooth-xxxxx.web.app
+            "String", "LANDING_BASE_URL",
+            "\"${project.findProperty("LANDING_BASE_URL") ?: ""}\""
+        )
     }
 
     buildTypes {
@@ -84,4 +98,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
 }
