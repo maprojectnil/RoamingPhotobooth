@@ -4,8 +4,10 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -37,68 +39,124 @@ fun FinalResultScreen(
     qrCodeBitmap: Bitmap?,
     onContinueClick: () -> Unit
 ) {
-    Column(
+    // BoxWithConstraints supaya tahu perbandingan lebar vs tinggi area yang
+    // tersedia (pola yang sama dipakai di MobileBoothScreen/TemplateListScreen)
+    // — dari situ kita tentukan lagi landscape atau bukan, tanpa bergantung ke
+    // Configuration.orientation yang kadang tidak akurat di semua device/split-screen.
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(Color.Black)
     ) {
-        Image(
-            bitmap = resultBitmap.asImageBitmap(),
-            contentDescription = "Hasil Akhir",
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .weight(1f, fill = false)
-                .fillMaxWidth()
-                .padding(16.dp)
-        )
+        val isLandscape = maxWidth > maxHeight
 
-        // Kartu QR: begitu foto selesai ke-upload ke Drive, QR-nya langsung muncul
-        // di sini supaya user bisa langsung scan buat lihat/download fotonya sendiri.
-        // Selama upload masih jalan di background, tampilkan status "menyiapkan".
-        Surface(
-            color = Color.White,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.padding(bottom = 8.dp)
-        ) {
-            if (qrCodeBitmap != null) {
+        if (isLandscape) {
+            // Landscape: 70% buat hasil foto (kiri), 30% buat QR + tombol (kanan).
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Image(
+                    bitmap = resultBitmap.asImageBitmap(),
+                    contentDescription = "Hasil Akhir",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .weight(0.7f)
+                        .fillMaxHeight()
+                        .padding(16.dp)
+                )
+
                 Column(
+                    modifier = Modifier
+                        .weight(0.3f)
+                        .fillMaxHeight()
+                        .padding(16.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(12.dp)
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Image(
-                        bitmap = qrCodeBitmap.asImageBitmap(),
-                        contentDescription = "QR Foto",
-                        modifier = Modifier.size(140.dp)
-                    )
-                    Text(
-                        text = "📱 Scan buat lihat/download foto",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color.Black,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
+                    QrCard(qrCodeBitmap = qrCodeBitmap)
+
+                    Button(
+                        onClick = onContinueClick,
+                        modifier = Modifier.padding(top = 16.dp)
+                    ) {
+                        Text("➡️ Lanjut (Sesi Baru)")
+                    }
                 }
-            } else {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(20.dp)
+            }
+        } else {
+            // Portrait: tetap seperti semula, ditumpuk dari atas ke bawah.
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Image(
+                    bitmap = resultBitmap.asImageBitmap(),
+                    contentDescription = "Hasil Akhir",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                )
+
+                QrCard(qrCodeBitmap = qrCodeBitmap)
+
+                Button(
+                    onClick = onContinueClick,
+                    modifier = Modifier.padding(bottom = 24.dp, top = 8.dp)
                 ) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    Text(
-                        text = "⏳ Menyiapkan QR (upload ke Drive)...",
-                        color = Color.Black,
-                        modifier = Modifier.padding(start = 12.dp)
-                    )
+                    Text("➡️ Lanjut (Sesi Baru)")
                 }
             }
         }
+    }
+}
 
-        Button(
-            onClick = onContinueClick,
-            modifier = Modifier.padding(bottom = 24.dp)
-        ) {
-            Text("➡️ Lanjut (Sesi Baru)")
+/**
+ * Kartu QR: begitu foto selesai ke-upload ke Drive, QR-nya langsung muncul
+ * di sini supaya user bisa langsung scan buat lihat/download fotonya sendiri.
+ * Selama upload masih jalan di background, tampilkan status "menyiapkan".
+ * Dipisah jadi composable sendiri karena dipakai bareng oleh layout landscape
+ * (Row 70:30) dan portrait (Column ditumpuk).
+ */
+@Composable
+private fun QrCard(qrCodeBitmap: Bitmap?) {
+    Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.padding(bottom = 8.dp)
+    ) {
+        if (qrCodeBitmap != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(12.dp)
+            ) {
+                Image(
+                    bitmap = qrCodeBitmap.asImageBitmap(),
+                    contentDescription = "QR Foto",
+                    modifier = Modifier.size(140.dp)
+                )
+                Text(
+                    text = "📱 Scan buat lihat/download foto",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.Black,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(20.dp)
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                Text(
+                    text = "⏳ Menyiapkan QR (upload ke Drive)...",
+                    color = Color.Black,
+                    modifier = Modifier.padding(start = 12.dp)
+                )
+            }
         }
     }
 }
