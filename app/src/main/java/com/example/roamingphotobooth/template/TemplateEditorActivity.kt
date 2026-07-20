@@ -21,6 +21,15 @@ import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 
 class TemplateEditorActivity : ComponentActivity() {
 
+    companion object {
+        /** Extra boolean: kalau true, activity langsung buka TemplateEditorScreen
+         * (mode buat/edit bingkai) — lewati layar daftar template. Dipakai khusus
+         * dari ikon setting di HomeScreen. Tempat lain yang membuka activity ini
+         * (pilih template buat sesi booth) TIDAK mengirim extra ini, jadi tetap
+         * mendarat di TemplateListScreen seperti biasa. */
+        const val EXTRA_START_IN_EDITOR = "start_in_editor"
+    }
+
     private val viewModel: TemplateEditorViewModel by viewModels()
     private lateinit var frameFileManager: FrameFileManager
     private lateinit var templateStorage: TemplateStorage
@@ -30,6 +39,12 @@ class TemplateEditorActivity : ComponentActivity() {
 
         frameFileManager = FrameFileManager(this)
         templateStorage = TemplateStorage(this)
+
+        // Kalau dibuka langsung ke mode editor (ikon setting HomeScreen), pastikan
+        // mulai dari state kosong — bukan sisa data dari sesi editor sebelumnya.
+        if (intent.getBooleanExtra(EXTRA_START_IN_EDITOR, false)) {
+            viewModel.reset()
+        }
 
         setContent {
             RoamingPhotoboothTheme {
@@ -42,7 +57,9 @@ class TemplateEditorActivity : ComponentActivity() {
 
     @Composable
     private fun EditorContent() {
-        var showEditor by remember { mutableStateOf(false) }
+        var showEditor by remember {
+            mutableStateOf(intent.getBooleanExtra(EXTRA_START_IN_EDITOR, false))
+        }
         var templates by remember { mutableStateOf(templateStorage.loadAllTemplates()) }
 
         val pickImageLauncher = rememberLauncherForActivityResult(
@@ -75,14 +92,6 @@ class TemplateEditorActivity : ComponentActivity() {
                     resultIntent.putExtra("selected_template_id", template.id)
                     setResult(RESULT_OK, resultIntent)
                     finish()
-                },
-                onCreateNewClick = {
-                    viewModel.reset()
-                    showEditor = true
-                },
-                onDeleteClick = { template ->
-                    templateStorage.deleteTemplate(template.id)
-                    templates = templateStorage.loadAllTemplates()
                 }
             )
         }

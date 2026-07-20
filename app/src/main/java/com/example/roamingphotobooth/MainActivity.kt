@@ -158,6 +158,7 @@ class MainActivity : ComponentActivity() {
                         onSettingsClick = {
                             templatePickerLauncher.launch(
                                 android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
+                                    .putExtra(com.example.roamingphotobooth.template.TemplateEditorActivity.EXTRA_START_IN_EDITOR, true)
                             )
                         }
                     )
