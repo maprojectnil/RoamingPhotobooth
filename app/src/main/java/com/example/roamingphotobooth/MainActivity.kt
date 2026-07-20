@@ -2,6 +2,7 @@ package com.example.roamingphotobooth
 
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -15,6 +16,9 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -119,9 +123,23 @@ class MainActivity : ComponentActivity() {
         enteringStandAfterFramePick = false
     }
 
+
+    private fun updateOrientation() {
+        requestedOrientation = when (boothMode.value) {
+            BoothMode.STAND -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            BoothMode.MOBILE -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            null -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
 
         // Setup client upload Drive (OAuth refresh token, atas nama akun Gmail asli
         // supaya kuota penyimpanan ikut akun itu, bukan Service Account).
