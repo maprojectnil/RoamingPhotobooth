@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -67,6 +68,11 @@ fun MobileBoothScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.Black)
+                    // Mirror horizontal (efek cermin) — di-pasang di Box pembungkus
+                    // supaya live view & frame overlay ke-flip bareng dan tetap
+                    // sejajar. Bitmap asli yang dipakai buat capture/simpan tidak
+                    // berubah, ini cuma efek tampilan.
+                    .scale(scaleX = -1f, scaleY = 1f)
             ) {
                 if (liveViewBitmap != null) {
                     Image(

@@ -3,9 +3,25 @@ package com.example.roamingphotobooth.ptp
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 
 object BitmapMerger {
+
+    /**
+     * Flip horizontal (efek cermin) sebuah bitmap. Dipakai di titik paling awal —
+     * begitu foto dari kamera selesai di-decode, SEBELUM masuk ke slot template /
+     * di-merge / disimpan — supaya efek mirror konsisten ke semua turunannya
+     * (preview kiri, layar review, hasil akhir yang disimpan & di-upload ke Drive).
+     *
+     * Bitmap sumber di-recycle otomatis kalau bukan bitmap yang sama dengan hasil
+     * (aman dipanggil langsung setelah decode, sebelum bitmap sumber dipakai lagi
+     * di tempat lain).
+     */
+    fun mirrorHorizontal(source: Bitmap): Bitmap {
+        val matrix = Matrix().apply { preScale(-1f, 1f) }
+        return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+    }
 
     /**
      * Menggabungkan foto asli dari kamera dengan frame overlay PNG.

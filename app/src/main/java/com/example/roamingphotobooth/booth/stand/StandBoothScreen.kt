@@ -21,6 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -187,7 +188,11 @@ private fun CaptureContent(
                     bitmap = liveViewBitmap.asImageBitmap(),
                     contentDescription = "Live View",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    // Mirror horizontal (efek cermin) — cuma tampilan, bitmap aslinya
+                    // yang dipakai buat capture/simpan tetap tidak berubah.
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .scale(scaleX = -1f, scaleY = 1f)
                 )
             }
 

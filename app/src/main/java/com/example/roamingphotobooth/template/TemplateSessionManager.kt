@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
+import com.example.roamingphotobooth.ptp.BitmapMerger
 
 private const val TAG = "TemplateSession"
 
@@ -44,11 +45,17 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
             return false
         }
 
-        val bitmap = BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
-        if (bitmap == null) {
+        val decoded = BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
+        if (decoded == null) {
             Log.e(TAG, "Gagal decode foto jadi Bitmap")
             return false
         }
+
+        // Mirror horizontal (efek cermin) di sini, di titik paling awal — supaya
+        // preview kiri, layar review, dan hasil akhir yang disimpan/di-upload semua
+        // otomatis konsisten pakai foto yang sudah ke-flip ini.
+        val bitmap = BitmapMerger.mirrorHorizontal(decoded)
+        decoded.recycle()
 
         capturedPhotos[slotOrder] = bitmap
         Log.i(TAG, "Foto masuk ke slot $slotOrder. Progress: $filledSlots/$totalSlots")

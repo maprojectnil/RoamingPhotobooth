@@ -307,7 +307,11 @@ class MainActivity : ComponentActivity() {
             pendingStandCaptureCallback = { photoBytes ->
                 standReviewPhotoBytes = photoBytes
                 runOnUiThread {
-                    standReviewBitmap.value = BitmapMerger.decodeBitmap(photoBytes)
+                    // Mirror horizontal di sini juga (bukan cuma addPhoto()) supaya foto
+                    // yang tampil di layar REVIEW sudah sama persis orientasinya dengan
+                    // yang bakal masuk ke slot kalau user tekan "Lanjut".
+                    val decoded = BitmapMerger.decodeBitmap(photoBytes)
+                    standReviewBitmap.value = decoded?.let { BitmapMerger.mirrorHorizontal(it) }
                     standIsCapturing.value = false
                 }
             }
@@ -526,7 +530,9 @@ class MainActivity : ComponentActivity() {
             if (session == null) {
                 // Tidak ada template aktif — fallback ke behavior lama (1 foto, frame test)
                 runOnUiThread { statusText.value = "📸 Foto diterima! (tanpa template aktif)" }
-                val cameraPhoto = BitmapMerger.decodeBitmap(photoBytes) ?: return@merge
+                val decodedPhoto = BitmapMerger.decodeBitmap(photoBytes) ?: return@merge
+                val cameraPhoto = BitmapMerger.mirrorHorizontal(decodedPhoto)
+                decodedPhoto.recycle()
                 val testFrame = createTestFrame(cameraPhoto.width, cameraPhoto.height)
                 val merged = BitmapMerger.mergeBitmap(cameraPhoto, testFrame)
                 val savedUri = saveMergedBitmap(merged)
