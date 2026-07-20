@@ -18,7 +18,7 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
 
     private val capturedPhotos = mutableMapOf<Int, Bitmap>() // key: slot order (1, 2, 3, ...)
 
-    val totalSlots: Int get() = template.slotCount
+    val totalSlots: Int get() = template.slots.map { it.order }.distinct().size
     val filledSlots: Int get() = capturedPhotos.size
     val isComplete: Boolean get() = filledSlots >= totalSlots
 
