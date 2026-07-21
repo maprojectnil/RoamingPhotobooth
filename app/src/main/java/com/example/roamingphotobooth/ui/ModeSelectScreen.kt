@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -15,21 +16,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.example.roamingphotobooth.settings.AppearanceSettings
+import com.example.roamingphotobooth.settings.BackgroundLayer
 
 /**
  * Layar pilih mode booth setelah user menekan "Mulai" di Home: Mobile atau Stand.
+ *
+ * [appearance] opsional (default = tampilan lama) — lihat catatan yang sama
+ * di HomeScreen.
  */
 @Composable
 fun ModeSelectScreen(
     onMobileClick: () -> Unit,
     onStandClick: () -> Unit,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    appearance: AppearanceSettings = AppearanceSettings()
 ) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        BackgroundLayer(
+            background = appearance.modeSelectBackground,
+            modifier = Modifier.fillMaxSize()
+        )
+
         IconButton(
             onClick = onBackClick,
             modifier = Modifier
@@ -53,15 +65,21 @@ fun ModeSelectScreen(
                 style = MaterialTheme.typography.headlineSmall,
                 color = Color.White
             )
-            Button(onClick = onMobileClick) {
+            Button(
+                onClick = onMobileClick,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(appearance.buttonColorArgb))
+            ) {
                 Text(
-                    text = "📱 Mobile",
+                    text = appearance.mobileButtonText,
                     modifier = Modifier.padding(horizontal = 32.dp, vertical = 12.dp)
                 )
             }
-            Button(onClick = onStandClick) {
+            Button(
+                onClick = onStandClick,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(appearance.buttonColorArgb))
+            ) {
                 Text(
-                    text = "🖥️ Stand",
+                    text = appearance.standButtonText,
                     modifier = Modifier.padding(horizontal = 32.dp, vertical = 12.dp)
                 )
             }

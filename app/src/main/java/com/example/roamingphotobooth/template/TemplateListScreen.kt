@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyRow
@@ -25,6 +26,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CollectionsBookmark
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image as ImageIcon
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -112,7 +114,14 @@ private fun averageAspectRatio(templates: List<PhotoTemplate>): Float {
 fun TemplateListScreen(
     templates: List<PhotoTemplate>,
     frameFileManager: FrameFileManager,
-    onTemplateSelected: (PhotoTemplate) -> Unit
+    onTemplateSelected: (PhotoTemplate) -> Unit,
+    // Opsional & default null supaya SEMUA pemanggil lama (mis. picker template
+    // saat mulai sesi booth) tetap berperilaku PERSIS seperti sebelumnya —
+    // tidak ada tombol hapus sama sekali kalau parameter ini tidak diisi.
+    // Hanya layar Settings > Frame List yang mengisi ini untuk menambah
+    // fungsi hapus, tanpa mengubah fungsi/tampilan TemplateListScreen di
+    // tempat lain.
+    onDeleteTemplate: ((PhotoTemplate) -> Unit)? = null
 ) {
     var selectedFilter by remember { mutableStateOf(OrientationFilter.ALL) }
 
@@ -180,6 +189,7 @@ fun TemplateListScreen(
                 templates = filteredTemplates,
                 frameFileManager = frameFileManager,
                 onTemplateSelected = onTemplateSelected,
+                onDeleteTemplate = onDeleteTemplate,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -243,6 +253,7 @@ private fun TemplateCarousel(
     templates: List<PhotoTemplate>,
     frameFileManager: FrameFileManager,
     onTemplateSelected: (PhotoTemplate) -> Unit,
+    onDeleteTemplate: ((PhotoTemplate) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -327,7 +338,8 @@ private fun TemplateCarousel(
                     frameFileManager = frameFileManager,
                     cardWidth = cardWidth,
                     viewportWidthPx = viewportWidthPx,
-                    onClick = { onTemplateSelected(template) }
+                    onClick = { onTemplateSelected(template) },
+                    onDeleteClick = onDeleteTemplate?.let { callback -> { callback(template) } }
                 )
             }
         }
@@ -340,7 +352,11 @@ private fun CarouselCard(
     frameFileManager: FrameFileManager,
     cardWidth: Dp,
     viewportWidthPx: Float,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Non-null HANYA saat dipanggil dari Settings > Frame List — lihat catatan
+    // di TemplateListScreen di atas. Kalau null, tidak ada tombol hapus sama
+    // sekali, jadi tampilan carousel di alur pilih-template (booth) tidak berubah.
+    onDeleteClick: (() -> Unit)? = null
 ) {
     val thumbnail = remember(template.framePngPath) {
         frameFileManager.loadBitmap(template.framePngPath)
@@ -378,6 +394,7 @@ private fun CarouselCard(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33)),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
+        Box(modifier = Modifier.width(cardWidth)) {
         Column(
             modifier = Modifier
                 .width(cardWidth)
@@ -474,6 +491,27 @@ private fun CarouselCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF9AA0AC)
             )
+        }
+
+        // Tombol hapus — cuma dirender kalau onDeleteClick disediakan (dari
+        // Settings > Frame List). Tidak mengubah tampilan carousel picker biasa.
+        if (onDeleteClick != null) {
+            androidx.compose.material3.IconButton(
+                onClick = onDeleteClick,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCC1A1C21))
+            ) {
+                Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Filled.Delete,
+                    contentDescription = "Hapus template ${template.name}",
+                    tint = Color(0xFFEF5350)
+                )
+            }
+        }
         }
     }
 }

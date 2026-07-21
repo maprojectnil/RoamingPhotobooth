@@ -11,6 +11,13 @@
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Dipakai untuk import gambar/video background Appearance dari galeri di
+         Android 13+ (READ_EXTERNAL_STORAGE lama tidak lagi cukup di API 33+). Di
+         praktiknya ActivityResultContracts.PickVisualMedia/GetContent sudah tidak
+         wajib butuh izin ini di kebanyakan kasus, tapi didaftarkan untuk jaga-jaga
+         di device/versi yang masih memeriksanya. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
 
     <application
         android:allowBackup="true"
@@ -51,6 +58,13 @@
             android:screenOrientation="landscape"
             android:exported="false"
             android:label="Pengaturan Bingkai"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".settings.SettingsActivity"
+            android:screenOrientation="landscape"
+            android:exported="false"
+            android:label="Pengaturan"
             android:windowSoftInputMode="adjustResize" />
 
     </application>

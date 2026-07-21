@@ -37,6 +37,9 @@ import com.example.roamingphotobooth.ptp.PtpNativeConnection
 import com.example.roamingphotobooth.ptp.BitmapMerger
 import com.example.roamingphotobooth.ui.HomeScreen
 import com.example.roamingphotobooth.ui.ModeSelectScreen
+import com.example.roamingphotobooth.settings.AppearanceSettings
+import com.example.roamingphotobooth.settings.AppearanceStorage
+import com.example.roamingphotobooth.settings.SettingsActivity
 
 class MainActivity : ComponentActivity() {
 
@@ -71,6 +74,13 @@ class MainActivity : ComponentActivity() {
     private var templateSession: com.example.roamingphotobooth.template.TemplateSessionManager? = null
     private lateinit var templateStorage: com.example.roamingphotobooth.template.TemplateStorage
     private lateinit var frameFileManager: com.example.roamingphotobooth.template.FrameFileManager
+
+    // Pengaturan tampilan (background Home/Mode Select, warna tombol & aksen,
+    // teks tombol) — diatur lewat Settings > Appearance (lihat SettingsActivity).
+    // Dibaca ulang setiap kali balik dari SettingsActivity supaya perubahan
+    // langsung kelihatan tanpa perlu restart app.
+    private lateinit var appearanceStorage: AppearanceStorage
+    private var appearanceSettings = mutableStateOf(AppearanceSettings())
 
     // Navigasi layar: Home -> pilih mode (Mobile/Stand) -> layar booth (live view + capture)
     private var currentScreen = mutableStateOf(AppScreen.HOME)
@@ -129,6 +139,16 @@ class MainActivity : ComponentActivity() {
     }
 
 
+    // Buka SettingsActivity (dropdown Frame Editor / Frame List / Appearance) dari
+    // ikon setting di HomeScreen. Tidak perlu baca result data — cukup muat ulang
+    // appearanceSettings begitu user kembali, supaya perubahan Appearance (kalau
+    // ada) langsung ter-refresh di Home/Mode Select.
+    private val settingsLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        appearanceSettings.value = appearanceStorage.load()
+    }
+
     private fun updateOrientation() {
         requestedOrientation = when (boothMode.value) {
             BoothMode.STAND -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -158,6 +178,8 @@ class MainActivity : ComponentActivity() {
         deviceManager = PtpDeviceManager(this)
         templateStorage = com.example.roamingphotobooth.template.TemplateStorage(this)
         frameFileManager = com.example.roamingphotobooth.template.FrameFileManager(this)
+        appearanceStorage = AppearanceStorage(this)
+        appearanceSettings.value = appearanceStorage.load()
 
         setContent {
             RoamingPhotoboothTheme {
@@ -165,11 +187,11 @@ class MainActivity : ComponentActivity() {
                     AppScreen.HOME -> HomeScreen(
                         onMulaiClick = { currentScreen.value = AppScreen.MODE_SELECT },
                         onSettingsClick = {
-                            templatePickerLauncher.launch(
-                                android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
-                                    .putExtra(com.example.roamingphotobooth.template.TemplateEditorActivity.EXTRA_START_IN_EDITOR, true)
+                            settingsLauncher.launch(
+                                android.content.Intent(this, SettingsActivity::class.java)
                             )
-                        }
+                        },
+                        appearance = appearanceSettings.value
                     )
 
                     AppScreen.MODE_SELECT -> ModeSelectScreen(
@@ -178,7 +200,8 @@ class MainActivity : ComponentActivity() {
                             currentScreen.value = AppScreen.BOOTH
                         },
                         onStandClick = { openStandFramePicker() },
-                        onBackClick = { currentScreen.value = AppScreen.HOME }
+                        onBackClick = { currentScreen.value = AppScreen.HOME },
+                        appearance = appearanceSettings.value
                     )
 
                     AppScreen.BOOTH -> when (boothMode.value) {
@@ -226,7 +249,8 @@ class MainActivity : ComponentActivity() {
                                 currentScreen.value = AppScreen.BOOTH
                             },
                             onStandClick = { openStandFramePicker() },
-                            onBackClick = { currentScreen.value = AppScreen.HOME }
+                            onBackClick = { currentScreen.value = AppScreen.HOME },
+                            appearance = appearanceSettings.value
                         )
                     }
                 }
