@@ -2,6 +2,7 @@ package com.example.roamingphotobooth.template
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.gestures.snapping.SnapPosition
 import androidx.compose.foundation.layout.Arrangement
@@ -71,13 +72,58 @@ import kotlin.math.min
  * paling besar & paling depan (zIndex tinggi), kartu di kiri/kanannya mengecil
  * (scale) dan makin transparan makin jauh dari tengah — efeknya dihitung ulang
  * tiap frame scroll (bukan cuma saat snap), jadi terasa depth-nya pas digeser.
+ *
+ * Karena bingkai bisa berupa 2 orientasi (landscape & potrait), di atas carousel
+ * ada filter pill "Semua / Landscape / Potrait" supaya user bisa fokus ke satu
+ * jenis orientasi tanpa harus scroll bolak-balik lewat semua template.
  */
+
+/** Filter orientasi yang bisa dipilih user di atas carousel. */
+private enum class OrientationFilter(val label: String) {
+    ALL("Semua"),
+    LANDSCAPE("Landscape"),
+    PORTRAIT("Potrait")
+}
+
+/**
+ * Orientasi bingkai ditentukan dari metadata ukuran asli PNG bingkai
+ * (frameWidthPx vs frameHeightPx) yang sudah tersimpan di PhotoTemplate —
+ * TIDAK perlu load bitmap dulu, jadi murah dipanggil untuk semua item saat
+ * filter dievaluasi. Bingkai persegi (width == height) dianggap Potrait.
+ */
+private val PhotoTemplate.isLandscapeFrame: Boolean
+    get() = frameWidthPx > frameHeightPx
+
+/**
+ * Rata-rata aspect ratio (width/height) dari satu set template, dipakai
+ * TemplateCarousel buat memutuskan seberapa besar jatah lebar kartu.
+ * Dihitung dari metadata frameWidthPx/frameHeightPx (murah, tidak perlu
+ * load bitmap) — cukup akurat untuk keputusan ukuran kartu secara umum,
+ * meskipun render tiap kartu tetap pakai aspect ratio dari bitmap asli
+ * masing-masing (lihat CarouselCard).
+ */
+private fun averageAspectRatio(templates: List<PhotoTemplate>): Float {
+    if (templates.isEmpty()) return 2f / 3f
+    val sum = templates.sumOf { it.frameWidthPx.toDouble() / it.frameHeightPx.toDouble() }
+    return (sum / templates.size).toFloat()
+}
+
 @Composable
 fun TemplateListScreen(
     templates: List<PhotoTemplate>,
     frameFileManager: FrameFileManager,
     onTemplateSelected: (PhotoTemplate) -> Unit
 ) {
+    var selectedFilter by remember { mutableStateOf(OrientationFilter.ALL) }
+
+    val filteredTemplates = remember(templates, selectedFilter) {
+        when (selectedFilter) {
+            OrientationFilter.ALL -> templates
+            OrientationFilter.LANDSCAPE -> templates.filter { it.isLandscapeFrame }
+            OrientationFilter.PORTRAIT -> templates.filter { !it.isLandscapeFrame }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -99,25 +145,78 @@ fun TemplateListScreen(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "${templates.size} template tersedia",
+                text = "${filteredTemplates.size} template tersedia",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = Color.White
             )
         }
 
+        if (templates.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(14.dp))
+            OrientationFilterRow(
+                selected = selectedFilter,
+                onSelect = { selectedFilter = it },
+                modifier = Modifier.padding(horizontal = 20.dp)
+            )
+        }
+
         Spacer(modifier = Modifier.height(18.dp))
 
-        if (templates.isEmpty()) {
-            Box(modifier = Modifier.padding(horizontal = 20.dp)) {
-                EmptyState()
+        if (filteredTemplates.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 20.dp)
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                EmptyState(
+                    hasAnyTemplate = templates.isNotEmpty(),
+                    filter = selectedFilter
+                )
             }
         } else {
             TemplateCarousel(
-                templates = templates,
+                templates = filteredTemplates,
                 frameFileManager = frameFileManager,
-                onTemplateSelected = onTemplateSelected
+                onTemplateSelected = onTemplateSelected,
+                modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+/**
+ * Baris pill filter orientasi. Sengaja dibuat custom (bukan pakai FilterChip
+ * bawaan Material3) supaya warnanya bisa persis mengikuti palet gelap +
+ * aksen cyan yang dipakai di seluruh layar ini, bukan warna default tema.
+ */
+@Composable
+private fun OrientationFilterRow(
+    selected: OrientationFilter,
+    onSelect: (OrientationFilter) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        OrientationFilter.values().forEach { filter ->
+            val isSelected = filter == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (isSelected) Color(0xFF4DD0E1) else Color(0xFF262A33))
+                    .clickable { onSelect(filter) }
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = filter.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isSelected) Color(0xFF16181D) else Color(0xFFAEB4C0)
+                )
+            }
         }
     }
 }
@@ -125,7 +224,8 @@ fun TemplateListScreen(
 /**
  * Carousel horizontal dengan depth animation. Cara kerjanya:
  * 1. BoxWithConstraints buat tahu lebar viewport (dipakai hitung jarak tiap
- *    kartu ke titik tengah layar dalam satuan px).
+ *    kartu ke titik tengah layar dalam satuan px, DAN buat hitung lebar kartu
+ *    yang proporsional ke lebar layar — lihat `cardWidth` di bawah).
  * 2. LazyRow diberi contentPadding kiri-kanan sebesar setengah lebar viewport
  *    dikurangi setengah lebar kartu, supaya kartu PERTAMA dan TERAKHIR pun bisa
  *    berhenti tepat di tengah (bukan mepet ke pinggir layar).
@@ -142,7 +242,8 @@ fun TemplateListScreen(
 private fun TemplateCarousel(
     templates: List<PhotoTemplate>,
     frameFileManager: FrameFileManager,
-    onTemplateSelected: (PhotoTemplate) -> Unit
+    onTemplateSelected: (PhotoTemplate) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
     val flingBehavior = rememberSnapFlingBehavior(
@@ -150,11 +251,65 @@ private fun TemplateCarousel(
         snapPosition = SnapPosition.Center
     )
 
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    // fillMaxSize (bukan cuma fillMaxWidth seperti sebelumnya) supaya
+    // BoxWithConstraints ini juga tahu TINGGI ruang yang benar-benar
+    // tersedia (dari `modifier.weight(1f)` yang dikasih pemanggil) —
+    // itu kunci biar kartu tidak pernah kepotong secara vertikal lagi.
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val viewportWidthPx = with(LocalDensity.current) {
             maxWidth.toPx()
         }
-        val cardWidth = 168.dp
+
+        // Lebar kartu dibuat PROPORSIONAL ke lebar layar (bukan angka tetap
+        // 168.dp seperti sebelumnya). Karena bingkai landscape jauh lebih
+        // pendek dari potrait untuk lebar yang sama (tinggi kartu = cardWidth
+        // / aspectRatio), pakai lebar yang sama utk keduanya bikin kartu
+        // landscape kelihatan kecil walau lebarnya sama besar. Jadi jatah
+        // lebar dihitung beda tergantung orientasi rata-rata set yang lagi
+        // ditampilkan (ditentukan dari metadata frameWidthPx/frameHeightPx,
+        // bukan tebakan):
+        // - Set landscape (rata-rata width > height): jatah lebar sebagian
+        //   besar viewport (65%).
+        // - Set potrait/campuran: tetap seperti sebelumnya (58% viewport,
+        //   190dp-260dp).
+        val avgAspectRatio = remember(templates) { averageAspectRatio(templates) }
+        val isLandscapeSet = avgAspectRatio > 1.05f
+        val widthBasedCardWidth = if (isLandscapeSet) {
+            (maxWidth * 0.65f).coerceAtLeast(260.dp)
+        } else {
+            (maxWidth * 0.58f).coerceIn(190.dp, 260.dp)
+        }
+
+        // BATAS DARI TINGGI: dari `maxHeight` yang tersedia, sisihkan ruang
+        // buat bagian non-gambar di dalam kartu (padding atas-bawah Column
+        // 14dp*2, spacer 10dp+2dp, baris judul + baris jumlah slot) sebelum
+        // sisanya dipakai buat gambar bingkai. Angka 100dp sengaja dilebihkan
+        // dikit dari perkiraan itu (~76dp) sebagai buffer aman supaya teks
+        // nama template & jumlah slot foto DIJAMIN tidak pernah ikut kepotong
+        // walau ukuran font/densitas layar beda-beda antar device.
+        //
+        // Dipakai rasio PALING RENDAH (bingkai paling "tinggi" relatif ke
+        // lebarnya) di antara seluruh template yang sedang tampil — bukan
+        // rata-rata — supaya template manapun yang paling butuh tinggi tetap
+        // dijamin muat, bukan cuma yang rata-rata.
+        val nonImageChromeHeight = 100.dp
+        val availableImageHeight = (maxHeight - nonImageChromeHeight).coerceAtLeast(80.dp)
+        val minAspectRatio = remember(templates) {
+            templates.minOfOrNull { it.frameWidthPx.toFloat() / it.frameHeightPx.toFloat() }
+                ?: avgAspectRatio
+        }
+        val heightBasedCardWidth = availableImageHeight * minAspectRatio
+
+        // Lebar kartu FINAL = yang lebih kecil di antara batas lebar & batas
+        // tinggi — jadi kartu dijamin selalu muat penuh di kedua arah
+        // sekaligus, tidak akan pernah kepotong di sisi manapun, apapun
+        // orientasi/ukuran layarnya.
+        val cardWidth = if (widthBasedCardWidth < heightBasedCardWidth) {
+            widthBasedCardWidth
+        } else {
+            heightBasedCardWidth
+        }.coerceAtLeast(160.dp)
+
         val sidePadding = max((maxWidth - cardWidth) / 2, 0.dp)
 
         LazyRow(
@@ -324,7 +479,17 @@ private fun CarouselCard(
 }
 
 @Composable
-private fun EmptyState() {
+private fun EmptyState(
+    hasAnyTemplate: Boolean,
+    filter: OrientationFilter
+) {
+    val message = when {
+        !hasAnyTemplate -> "Template akan muncul di sini setelah dibuat."
+        filter == OrientationFilter.LANDSCAPE -> "Belum ada template dengan orientasi Landscape."
+        filter == OrientationFilter.PORTRAIT -> "Belum ada template dengan orientasi Potrait."
+        else -> "Template akan muncul di sini setelah dibuat."
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -351,7 +516,7 @@ private fun EmptyState() {
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Template akan muncul di sini setelah dibuat.",
+                text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF9AA0AC)
             )
