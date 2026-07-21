@@ -24,7 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 
 /**
  * Layar penuh yang muncul setelah SEMUA slot foto terisi: nampilin hasil akhir
@@ -70,7 +72,8 @@ fun FinalResultScreen(
                     modifier = Modifier
                         .weight(0.3f)
                         .fillMaxHeight()
-                        .padding(16.dp),
+                        .background(Color(0xFF262A33))
+                        .padding(25.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -111,6 +114,39 @@ fun FinalResultScreen(
                 }
             }
         }
+    }
+}
+
+@Preview(showBackground = true, device = "spec:width=411dp,height=891dp")
+@Composable
+private fun FinalResultScreenPreview() {
+    val dummyBitmap = Bitmap.createBitmap(400, 600, Bitmap.Config.ARGB_8888).apply {
+        eraseColor(android.graphics.Color.GRAY)
+    }
+    val dummyQr = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply {
+        eraseColor(android.graphics.Color.WHITE)
+    }
+    RoamingPhotoboothTheme {
+        FinalResultScreen(
+            resultBitmap = dummyBitmap,
+            qrCodeBitmap = dummyQr,
+            onContinueClick = {}
+        )
+    }
+}
+
+@Preview(showBackground = true, device = "spec:width=891dp,height=411dp")
+@Composable
+private fun FinalResultScreenLandscapePreview() {
+    val dummyBitmap = Bitmap.createBitmap(600, 400, Bitmap.Config.ARGB_8888).apply {
+        eraseColor(android.graphics.Color.GRAY)
+    }
+    RoamingPhotoboothTheme {
+        FinalResultScreen(
+            resultBitmap = dummyBitmap,
+            qrCodeBitmap = null,
+            onContinueClick = {}
+        )
     }
 }
 
