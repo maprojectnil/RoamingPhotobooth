@@ -3,6 +3,7 @@ package com.example.roamingphotobooth.template
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
@@ -77,24 +78,29 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
             Log.w(TAG, "buildFinalImage dipanggil padahal belum semua slot terisi ($filledSlots/$totalSlots)")
             return null
         }
-        return buildComposite(frameBitmap)
+        return buildComposite(frameBitmap, showEmptySlotPlaceholders = false)
     }
 
     /**
      * Sama seperti [buildFinalImage], tapi BOLEH dipanggil kapan pun — walau slot belum
-     * penuh. Slot yang belum ada fotonya akan dibiarkan kosong/transparan (biasanya
-     * tertutup oleh area frame PNG di atasnya). Dipakai untuk preview live di layar
-     * sambil sesi foto masih berjalan.
+     * penuh. Dipakai untuk preview live di layar sambil sesi foto masih berjalan.
+     *
+     * [showEmptySlotPlaceholders] mengontrol tampilan slot yang BELUM ada fotonya:
+     * - `false` (default, dipakai mode MOBILE): slot kosong dibiarkan transparan
+     *   seperti behavior lama — biasanya tertutup area frame PNG di atasnya.
+     * - `true` (dipakai mode STAND): slot kosong digambar sebagai kotak berwarna
+     *   bernomor (nomor = urutan foto, warna sama = slot duplikat/foto yang sama)
+     *   supaya operator langsung tahu status tiap slot dari layar preview kiri.
      */
-    fun buildPreviewImage(frameBitmap: Bitmap): Bitmap {
-        return buildComposite(frameBitmap)
+    fun buildPreviewImage(frameBitmap: Bitmap, showEmptySlotPlaceholders: Boolean = false): Bitmap {
+        return buildComposite(frameBitmap, showEmptySlotPlaceholders)
     }
 
     /**
      * Layer compositing inti: gambar foto-foto yang SUDAH ADA (partial atau lengkap)
      * di posisi slotnya masing-masing, lalu tumpuk frame PNG di atasnya.
      */
-    private fun buildComposite(frameBitmap: Bitmap): Bitmap {
+    private fun buildComposite(frameBitmap: Bitmap, showEmptySlotPlaceholders: Boolean): Bitmap {
         val resultWidth = template.frameWidthPx
         val resultHeight = template.frameHeightPx
 
@@ -102,9 +108,23 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
         val canvas = Canvas(resultBitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
-        // Layer 1: gambar tiap foto yang sudah ter-capture di posisi slotnya (bawah)
+        // Peta nomor urut -> rank warna, sekali per composite (bukan per-slot) supaya
+        // slot dgn `order` sama (duplikat) selalu dapat warna yang identik. Cuma
+        // dibutuhkan kalau placeholder-nya memang mau ditampilkan.
+        val rankMap = if (showEmptySlotPlaceholders) {
+            SlotColorPalette.buildRankMap(template.slots.map { it.order })
+        } else {
+            emptyMap()
+        }
+
+        // Layer 1: gambar tiap foto yang sudah ter-capture di posisi slotnya (bawah).
+        // Kalau [showEmptySlotPlaceholders] true (mode STAND), slot yang BELUM ada
+        // fotonya digambar sebagai kotak placeholder berwarna dengan nomor urutnya
+        // di tengah. Kalau false (mode MOBILE, behavior lama), slot kosong dilewati
+        // sama sekali alias tetap transparan.
         for (slot in template.slots) {
-            val photo = capturedPhotos[slot.order] ?: continue
+            val photo = capturedPhotos[slot.order]
+            if (photo == null && !showEmptySlotPlaceholders) continue
 
             val destRect = Rect(
                 (slot.xRatio * resultWidth).toInt(),
@@ -120,10 +140,18 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
                     destRect.centerX().toFloat(),
                     destRect.centerY().toFloat()
                 )
-                drawPhotoCoverFit(canvas, photo, destRect, paint)
+                if (photo != null) {
+                    drawPhotoCoverFit(canvas, photo, destRect, paint)
+                } else {
+                    drawEmptySlotPlaceholder(canvas, slot, destRect, rankMap)
+                }
                 canvas.restore()
             } else {
-                drawPhotoCoverFit(canvas, photo, destRect, paint)
+                if (photo != null) {
+                    drawPhotoCoverFit(canvas, photo, destRect, paint)
+                } else {
+                    drawEmptySlotPlaceholder(canvas, slot, destRect, rankMap)
+                }
             }
         }
 
@@ -137,6 +165,56 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
         if (scaledFrame != frameBitmap) scaledFrame.recycle()
 
         return resultBitmap
+    }
+
+    /**
+     * Gambar 1 kotak placeholder untuk slot yang BELUM ada fotonya: kotak rounded
+     * berwarna solid (warna dari [SlotColorPalette], konsisten per nomor urut lewat
+     * [rankMap]) dengan garis tepi sedikit lebih gelap, dan nomor urut slot besar
+     * di tengah. Ukuran teks & radius sudut menyesuaikan ukuran slot supaya tetap
+     * proporsional baik untuk slot kecil maupun besar.
+     */
+    private fun drawEmptySlotPlaceholder(
+        canvas: Canvas,
+        slot: PhotoSlot,
+        destRect: Rect,
+        rankMap: Map<Int, Int>
+    ) {
+        val width = destRect.width().toFloat()
+        val height = destRect.height().toFloat()
+        if (width <= 0f || height <= 0f) return
+
+        val baseColor = SlotColorPalette.colorForOrder(slot.order, rankMap)
+        val shortSide = minOf(width, height)
+        val cornerRadius = shortSide * 0.08f
+
+        // Isi kotak
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = baseColor
+        }
+        val rectF = RectF(destRect)
+        canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, fillPaint)
+
+        // Garis tepi sedikit lebih gelap, biar kotaknya tidak flat & tetap kelihatan
+        // rapi walau warnanya terang (mis. kuning).
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = shortSide * 0.02f
+            color = SlotColorPalette.darken(baseColor)
+        }
+        canvas.drawRoundRect(rectF, cornerRadius, cornerRadius, borderPaint)
+
+        // Nomor urut, di tengah kotak, dengan bayangan tipis supaya kontras di warna apa pun.
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+            textSize = shortSide * 0.4f
+            setShadowLayer(shortSide * 0.03f, 0f, shortSide * 0.015f, Color.argb(110, 0, 0, 0))
+        }
+        val textY = destRect.centerY() - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(slot.order.toString(), destRect.centerX().toFloat(), textY, textPaint)
     }
 
     /**

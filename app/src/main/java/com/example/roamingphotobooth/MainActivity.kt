@@ -109,9 +109,18 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK) {
             val templateId = result.data?.getStringExtra("selected_template_id")
             if (templateId != null) {
-                loadActiveTemplate(templateId)
+                // Set boothMode DULU sebelum loadActiveTemplate() — dipakai composable
+                // buat nentuin layar mana (Mobile/Stand) yang dirender begitu
+                // currentScreen pindah ke BOOTH di bawah.
                 if (enteringStandAfterFramePick) {
                     boothMode.value = BoothMode.STAND
+                }
+                // showEmptySlotPlaceholders diambil LANGSUNG dari enteringStandAfterFramePick
+                // (bukan baca boothMode.value di dalam refreshPreview) — supaya TIDAK
+                // bergantung pada timing/urutan kapan boothMode.value ke-update. Ini akar
+                // penyebab kotak nomor slot sempat hilang pas sesi Stand baru dimulai.
+                loadActiveTemplate(templateId, showEmptySlotPlaceholders = enteringStandAfterFramePick)
+                if (enteringStandAfterFramePick) {
                     currentScreen.value = AppScreen.BOOTH
                 }
             }
@@ -242,7 +251,7 @@ class MainActivity : ComponentActivity() {
         // tidak perlu dipanggil ulang di sini (mencegah race condition / sesi ganda)
     }
 
-    private fun loadActiveTemplate(templateId: String) {
+    private fun loadActiveTemplate(templateId: String, showEmptySlotPlaceholders: Boolean) {
         val template = templateStorage.loadTemplate(templateId) ?: return
         activeTemplate.value = template
         templateSession = com.example.roamingphotobooth.template.TemplateSessionManager(template)
@@ -252,7 +261,7 @@ class MainActivity : ComponentActivity() {
         frameOverlayBitmap.value = frameBmp
         finalResultBitmap.value = null
         qrCodeBitmap.value = null
-        refreshPreview()
+        refreshPreview(showEmptySlotPlaceholders)
 
         statusText.value = "Template '${template.name}' aktif (${template.slotCount} slot foto)"
     }
@@ -261,12 +270,29 @@ class MainActivity : ComponentActivity() {
      * Bangun ulang preview kiri (frame + foto yang sudah masuk sejauh ini) dan simpan
      * ke state supaya Compose langsung re-render. Kalau belum ada template aktif,
      * preview cuma frame polos tanpa foto.
+     *
+     * [showEmptySlotPlaceholders] mengontrol kotak nomor untuk slot yang masih kosong
+     * (lihat [com.example.roamingphotobooth.template.TemplateSessionManager.buildPreviewImage]) —
+     * HANYA `true` di mode STAND, `false` di Mobile (live view kamera Mobile sendiri
+     * sudah ditampilkan langsung di slot target, jadi kotak nomor di sana cuma bikin
+     * ramai/tumpang tindih — lihat MobileBoothScreen.FrameCaptureArea).
+     *
+     * Default parameter (baca `boothMode.value` saat ini) dipakai untuk pemanggilan yang
+     * TIDAK terkait langsung dengan alur pilih-template (mis. [startNewSession] atau
+     * callback foto baru masuk) — di situ boothMode.value sudah pasti akurat karena
+     * sesi sedang berjalan di mode yang sama, tidak sedang berpindah mode. Untuk alur
+     * pilih-template (lihat [templatePickerLauncher] & [loadActiveTemplate]), flag ini
+     * SELALU dikirim eksplisit supaya tidak bergantung sama sekali pada timing kapan
+     * boothMode.value ke-update.
      */
-    private fun refreshPreview() {
+    private fun refreshPreview(showEmptySlotPlaceholders: Boolean = boothMode.value == BoothMode.STAND) {
         val session = templateSession
         val frameBmp = frameOverlayBitmap.value
         previewBitmap.value = if (session != null && frameBmp != null) {
-            session.buildPreviewImage(frameBmp)
+            session.buildPreviewImage(
+                frameBitmap = frameBmp,
+                showEmptySlotPlaceholders = showEmptySlotPlaceholders
+            )
         } else {
             frameBmp
         }
@@ -376,7 +402,13 @@ class MainActivity : ComponentActivity() {
             }
 
             val frameBmp = frameOverlayBitmap.value
-            val previewImage = frameBmp?.let { session.buildPreviewImage(it) } // compose bitmap, berat -> background
+            // standAcceptPhoto() cuma dipanggil dari alur STAND, jadi kotak nomor slot
+            // kosong SELALU ditampilkan di sini (showEmptySlotPlaceholders = true) —
+            // beda dari refreshPreview() yang dipakai bersama Mobile & Stand dan baru
+            // baca boothMode.value buat nentuin itu.
+            val previewImage = frameBmp?.let {
+                session.buildPreviewImage(it, showEmptySlotPlaceholders = true)
+            } // compose bitmap, berat -> background
 
             var finalImage: Bitmap? = null
             var savedName: String? = null

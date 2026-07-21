@@ -45,6 +45,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -228,21 +229,66 @@ private fun CarouselCard(
                 .padding(14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Kotak bingkai foto rasio 4R (4x6 = lebar:tinggi 2:3), frame di-fit
-            // (bukan crop) supaya seluruh bingkai kelihatan utuh tanpa terpotong.
+            // Kotak pembungkus thumbnail SEKARANG ikutin rasio ASLI bitmap bingkai
+            // (bukan dipaksa 2:3 lagi) — jadi ContentScale.Fit SELALU mengisi PENUH
+            // kotak tanpa letterbox sama sekali, apapun bentuk bingkainya (potret,
+            // landscape, dll). Konsekuensinya tinggi kartu di carousel jadi bisa
+            // beda-beda antar template (bukan seragam persis), tapi ini trade-off
+            // yang jauh lebih AMAN daripada replikasi manual rumus letterbox
+            // ContentScale.Fit — pendekatan itu gampang meleset dikit (pembulatan,
+            // dsb) dan bikin kotak nomor slot salah ukuran/posisi total, bahkan
+            // bisa sampai tidak kelihatan sama sekali.
+            //
+            // Rasio dihitung dari dimensi BITMAP YANG BENERAN DI-LOAD
+            // (thumbnail.width/height) — bukan dari metadata template.frameWidthPx/
+            // frameHeightPx — supaya persis sama dengan yang Compose pakai buat
+            // nge-render Image-nya (ContentScale apapun selalu pakai intrinsic size
+            // bitmap, bukan metadata manapun).
+            val frameAspectRatio = remember(thumbnail) {
+                if (thumbnail != null && thumbnail.height > 0) {
+                    thumbnail.width.toFloat() / thumbnail.height.toFloat()
+                } else {
+                    2f / 3f
+                }
+            }
+            var thumbnailWidthPx by remember(template.id) { mutableStateOf(0f) }
+            var thumbnailHeightPx by remember(template.id) { mutableStateOf(0f) }
+
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(2f / 3f)
+                    .aspectRatio(frameAspectRatio)
                     .clip(RoundedCornerShape(14.dp))
                     .background(
                         Brush.linearGradient(
                             listOf(Color(0xFF32363F), Color(0xFF2B2E36))
                         )
-                    ),
+                    )
+                    .onSizeChanged { size ->
+                        thumbnailWidthPx = size.width.toFloat()
+                        thumbnailHeightPx = size.height.toFloat()
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 if (thumbnail != null) {
+                    // Layer BAWAH: kotak nomor slot. Karena kotak pembungkus di atas
+                    // udah pas rasio bingkainya, containerWidthPx/HeightPx di sini =
+                    // ukuran gambar yang BENERAN tampil (tidak ada letterbox yang perlu
+                    // dikompensasi lagi). Digambar SEBELUM (di belakang) bingkai supaya
+                    // cuma kelihatan lewat "lubang" transparan slot di PNG bingkai,
+                    // PERSIS seperti hasil akhir foto nanti (lihat
+                    // TemplateSessionManager.buildComposite, urutan layer-nya sama:
+                    // slot/foto dulu, baru bingkai di atasnya).
+                    TemplateSlotOverlay(
+                        slots = template.slots,
+                        containerWidthPx = thumbnailWidthPx,
+                        containerHeightPx = thumbnailHeightPx,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Layer ATAS: bingkai PNG asli — bagian yang opaque otomatis
+                    // nutupin kotak nomor di baliknya, cuma bagian transparan
+                    // (lubang slot) yang nampilin warna+nomornya.
                     Image(
                         bitmap = thumbnail.asImageBitmap(),
                         contentDescription = "Thumbnail ${template.name}",
