@@ -3,6 +3,7 @@ package com.example.roamingphotobooth.print
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -46,6 +47,31 @@ class PrintServerRepository(context: Context) {
         val cached = _server.value
         if (cached != null && !forceRediscover) return cached
         return discoverAndSave()
+    }
+
+    /**
+     * <-- BARU: dipakai layar Pengaturan > Printer. User memilih salah satu hasil
+     * [discoverAvailableServers] lewat dropdown, lalu pilihan itu disimpan di sini
+     * sebagai printer default — dipakai lagi oleh FinalResultScreen & PrintServerConnectionManager
+     * tanpa perlu cari ulang tiap kali mau print.
+     */
+    fun selectServer(info: PrintServerInfo) = save(info)
+
+    /**
+     * <-- BARU: cari SEMUA Print Server yang merespons di jaringan selama [timeoutMs],
+     * untuk mengisi pilihan dropdown di layar Pengaturan. Beda dari [ensureServer]/
+     * [discoverAndSave] yang berhenti begitu 1 server ketemu — di sini kita kumpulkan
+     * semua supaya user bisa pilih sendiri kalau ada lebih dari satu printer di jaringan.
+     * Tidak menyimpan apa pun secara otomatis; simpan lewat [selectServer].
+     */
+    suspend fun discoverAvailableServers(timeoutMs: Long = 6000): List<PrintServerInfo> {
+        val found = LinkedHashMap<String, PrintServerInfo>()
+        withTimeoutOrNull(timeoutMs) {
+            discovery.discover().collect { info ->
+                found["${info.host}:${info.port}"] = info
+            }
+        }
+        return found.values.toList()
     }
 
     fun clearCache() {

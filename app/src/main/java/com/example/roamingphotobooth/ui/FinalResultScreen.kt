@@ -22,7 +22,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,8 +47,6 @@ import com.example.roamingphotobooth.print.PrintJobStatus
 import com.example.roamingphotobooth.print.PrintJobWebSocketClient
 import com.example.roamingphotobooth.print.PrintServerInfo
 import com.example.roamingphotobooth.print.ActivePrintJobTracker
-import androidx.compose.runtime.LaunchedEffect
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.rememberCoroutineScope
 import com.example.roamingphotobooth.print.PrintServerRepository
 
@@ -153,6 +150,12 @@ fun FinalResultScreen(
  * Tombol "Test Print" — fitur terpisah untuk uji coba kirim foto hasil akhir
  * ke Print Server Windows lewat HTTP. Tidak berpengaruh ke alur photobooth
  * utama (onContinueClick, upload Drive, dsb).
+ *
+ * <-- BARU: pencarian/pemilihan printer TIDAK lagi terjadi di sini — itu sudah
+ * dipindah ke Pengaturan > Printer (lihat settings.PrinterSettingsScreen, yang
+ * juga yang menyimpan pilihan lewat PrintServerRepository.selectServer()).
+ * Di sini kita cuma BACA printer yang sudah tersimpan, lalu user tinggal
+ * menentukan jumlah cetak (NumericStepper) dan menekan "Kirim".
  */
 @Composable
 private fun TestPrintButton(resultBitmap: Bitmap) {
@@ -162,37 +165,17 @@ private fun TestPrintButton(resultBitmap: Bitmap) {
     var showDialog by remember { mutableStateOf(false) }
     var isSending by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf<String?>(null) }
-    var copiesText by remember { mutableStateOf("1") }
+    var copies by remember { mutableStateOf(1) }
 
     // WebSocket client + tracker, hidup selama composable ini ada di layar.
     val wsClient = remember { PrintJobWebSocketClient() }
     val activePrintJobTracker = remember { ActivePrintJobTracker(wsClient, coroutineScope) }
     val realtimeStatus by activePrintJobTracker.status.collectAsState()
 
-    // <-- BARU: sumber alamat server sekarang dari mDNS discovery, bukan input manual.
+    // <-- BARU: cukup baca printer yang sudah dipilih lewat Pengaturan > Printer.
+    // Tidak ada discovery/mDNS lagi di layar ini.
     val serverRepository = remember { PrintServerRepository.getInstance(context) }
-    val discoveredServer by serverRepository.server.collectAsState()
-    var isDiscovering by remember { mutableStateOf(false) }
-    var discoveryError by remember { mutableStateOf<String?>(null) }
-
-    fun runDiscovery(force: Boolean) {
-        discoveryError = null
-        isDiscovering = true
-        coroutineScope.launch {
-            val result = serverRepository.ensureServer(forceRediscover = force)
-            isDiscovering = false
-            if (result == null) {
-                discoveryError = "Print Server tidak ditemukan. Pastikan PC & HP di Wi-Fi yang sama, lalu coba lagi."
-            }
-        }
-    }
-
-    // Begitu dialog dibuka dan belum ada server tersimpan, langsung cari otomatis.
-    LaunchedEffect(showDialog) {
-        if (showDialog && discoveredServer == null) {
-            runDiscovery(force = false)
-        }
-    }
+    val selectedServer by serverRepository.server.collectAsState()
 
     DisposableEffect(Unit) {
         onDispose { wsClient.disconnect() }
@@ -219,33 +202,28 @@ private fun TestPrintButton(resultBitmap: Bitmap) {
     if (showDialog) {
         AlertDialog(
             onDismissRequest = { if (!isSending) showDialog = false },
-            title = { Text("Test Print ke Print Server") },
+            title = { Text("Cetak Hasil Foto") },
             text = {
                 Column {
-                    // <-- BARU: status discovery menggantikan OutlinedTextField IP manual.
-                    PrintServerDiscoveryStatus(
-                        server = discoveredServer,
-                        isDiscovering = isDiscovering,
-                        error = discoveryError,
-                        onRetry = { runDiscovery(force = true) }
-                    )
+                    // <-- BARU: printer sudah pasti hasil pilihan di Pengaturan, jadi
+                    // di sini cukup ditampilkan (read-only), bukan dicari lagi.
+                    SelectedPrinterSummary(server = selectedServer)
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = copiesText,
-                        onValueChange = { input -> copiesText = input.filter { it.isDigit() } },
-                        label = { Text("Jumlah Copies") },
-                        enabled = !isSending
+                    Spacer(modifier = Modifier.height(12.dp))
+                    NumericStepper(
+                        value = copies,
+                        onValueChange = { copies = it },
+                        enabled = !isSending,
+                        label = "Jumlah Cetak"
                     )
                 }
             },
             confirmButton = {
                 Button(
-                    // <-- BARU: tombol kirim aktif hanya kalau server sudah ketemu.
-                    enabled = !isSending && discoveredServer != null,
+                    // <-- BARU: tombol kirim aktif hanya kalau ada printer tersimpan.
+                    enabled = !isSending && selectedServer != null,
                     onClick = {
-                        val server = discoveredServer ?: return@Button
-                        val copies = copiesText.toIntOrNull() ?: 1
+                        val server = selectedServer ?: return@Button
                         isSending = true
                         statusMessage = "Mengirim ke print server..."
 
@@ -254,8 +232,8 @@ private fun TestPrintButton(resultBitmap: Bitmap) {
 
                         val photoFile = bitmapToJpegFile(context, resultBitmap)
                         PrintServerClient.sendPrintJob(
-                            serverIp = server.host, // <-- BARU: dari hasil discovery, bukan input manual
-                            port = server.port,     // <-- BARU
+                            serverIp = server.host, // <-- dari printer tersimpan (Pengaturan), bukan input manual
+                            port = server.port,
                             photoFile = photoFile,
                             copies = copies
                         ) { result ->
@@ -296,68 +274,30 @@ private fun bitmapToJpegFile(context: Context, bitmap: Bitmap): File {
 }
 
 /**
- * <-- BARU: menampilkan status pencarian Print Server via mDNS.
- * Tiga kondisi: sedang mencari, ditemukan (tampilkan nama + alamat), atau gagal (dengan tombol coba lagi).
+ * <-- BARU: menggantikan PrintServerDiscoveryStatus (yang dulu aktif mencari
+ * lewat mDNS di sini). Sekarang cuma menampilkan printer yang SUDAH dipilih
+ * lewat Pengaturan > Printer — kalau belum ada, arahkan user ke sana.
  */
 @Composable
-private fun PrintServerDiscoveryStatus(
-    server: PrintServerInfo?,
-    isDiscovering: Boolean,
-    error: String?,
-    onRetry: () -> Unit
-) {
-    when {
-        isDiscovering -> {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                Text(
-                    text = "🔍 Mencari Print Server di jaringan...",
-                    modifier = Modifier.padding(start = 8.dp),
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-        }
-        server != null -> {
-            Column {
-                Text(
-                    text = "✅ Print Server: ${server.serviceName}",
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Text(
-                    text = "${server.host}:${server.port}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.Gray
-                )
-                Button(
-                    onClick = onRetry,
-                    modifier = Modifier.padding(top = 4.dp)
-                ) {
-                    Text("Cari Ulang")
-                }
-            }
-        }
-        error != null -> {
-            Column {
-                Text(
-                    text = "⚠️ $error",
-                    color = Color(0xFFE57373),
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Button(
-                    onClick = onRetry,
-                    modifier = Modifier.padding(top = 4.dp)
-                ) {
-                    Text("Coba Lagi")
-                }
-            }
-        }
-        else -> {
+private fun SelectedPrinterSummary(server: PrintServerInfo?) {
+    if (server != null) {
+        Column {
             Text(
-                text = "Menunggu pencarian Print Server...",
-                style = MaterialTheme.typography.labelMedium,
+                text = "🖨️ Printer: ${server.serviceName}",
+                style = MaterialTheme.typography.labelMedium
+            )
+            Text(
+                text = "${server.host}:${server.port}",
+                style = MaterialTheme.typography.labelSmall,
                 color = Color.Gray
             )
         }
+    } else {
+        Text(
+            text = "⚠️ Belum ada printer dipilih. Atur dulu lewat menu Pengaturan > Printer.",
+            color = Color(0xFFE57373),
+            style = MaterialTheme.typography.labelMedium
+        )
     }
 }
 
