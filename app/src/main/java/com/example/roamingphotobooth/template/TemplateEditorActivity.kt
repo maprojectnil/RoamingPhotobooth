@@ -70,8 +70,10 @@ class TemplateEditorActivity : ComponentActivity() {
 
         if (showEditor) {
             // TemplateEditorScreen sudah mengurus seluruh layout (workspace + panel
-            // kontrol, termasuk tombol pilih/ganti bingkai) — selalu tampil landscape
-            // penuh layar (dipaksa lewat AndroidManifest), tanpa Column pembungkus lagi.
+            // kontrol, termasuk tombol pilih/ganti bingkai) secara penuh layar, tanpa
+            // Column pembungkus lagi. Orientasi layar mengikuti sensor (lihat
+            // AndroidManifest.xml) — layout otomatis menyesuaikan lebar/tinggi lewat
+            // Modifier.weight()/fillMaxSize(), baik di portrait maupun landscape.
             TemplateEditorScreen(
                 viewModel = viewModel,
                 onPickFrameClick = { pickImageLauncher.launch("image/png") },

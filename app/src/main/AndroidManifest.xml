@@ -58,14 +58,16 @@
 
         <activity
             android:name=".template.TemplateEditorActivity"
-            android:screenOrientation="landscape"
+            android:screenOrientation="unspecified"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false"
             android:label="Pengaturan Bingkai"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".settings.SettingsActivity"
-            android:screenOrientation="landscape"
+            android:screenOrientation="unspecified"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:exported="false"
             android:label="Pengaturan"
             android:windowSoftInputMode="adjustResize" />
