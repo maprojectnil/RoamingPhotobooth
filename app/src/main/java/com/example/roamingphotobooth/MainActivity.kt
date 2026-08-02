@@ -32,6 +32,7 @@ import com.example.roamingphotobooth.nav.BoothMode
 import com.example.roamingphotobooth.ptp.NativePtpBridge
 import com.example.roamingphotobooth.ptp.PtpDeviceManager
 import com.example.roamingphotobooth.ptp.PtpSessionManager
+import com.example.roamingphotobooth.ptp.NativeUsbBulkTest
 import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 import com.example.roamingphotobooth.ptp.PtpNativeConnection
 import com.example.roamingphotobooth.ptp.BitmapMerger
@@ -42,6 +43,12 @@ import com.example.roamingphotobooth.settings.AppearanceStorage
 import com.example.roamingphotobooth.settings.SettingsActivity
 
 class MainActivity : ComponentActivity() {
+
+    // DEBUG ONLY: set true untuk isolasi masalah bulk transfer (lihat NativeUsbBulkTest.kt).
+    // Saat true, alur PTP normal (libusb) TIDAK jalan -- cuma test native yang jalan.
+    // Sudah tidak perlu lagi sejak PtpNativeConnection punya fallback otomatis
+    // ke native saat libusb gagal -- biarkan false.
+    private val RUN_NATIVE_BULK_TEST_ONLY = false
 
     private lateinit var deviceManager: PtpDeviceManager
     private var sessionManager: PtpSessionManager? = null
@@ -258,7 +265,18 @@ class MainActivity : ComponentActivity() {
         }
 
         deviceManager.startListening(
-            onReady = { device -> onCameraDeviceReady(device) },
+            onReady = { device ->
+                if (RUN_NATIVE_BULK_TEST_ONLY) {
+                    // DEBUG: isolasi apakah bulk transfer native Android (tanpa libusb)
+                    // bisa jalan di device ini. Jangan panggil onCameraDeviceReady()
+                    // di sini supaya tidak ada 2 pihak (test ini + libusb) berebut
+                    // claim interface yang sama secara bersamaan. Lihat logcat
+                    // dengan tag NativeBulkTest untuk hasilnya.
+                    NativeUsbBulkTest.run(this, device)
+                } else {
+                    onCameraDeviceReady(device)
+                }
+            },
             onDetached = {
                 runOnUiThread { statusText.value = "Kamera terputus. Menunggu kamera dicolok..." }
                 sessionManager?.closeSession()

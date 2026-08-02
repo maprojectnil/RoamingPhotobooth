@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <android/log.h>
+#include <unistd.h>
 #include "libusb.h"
 
 #define LOG_TAG "PtpBridge"
@@ -52,13 +53,56 @@ Java_com_example_roamingphotobooth_ptp_NativePtpBridge_claimInterface(JNIEnv *en
         return JNI_FALSE;
     }
 
-    int r = libusb_claim_interface(g_handle, 0);
+    // Beberapa ROM (mis. MIUI/HyperOS di chipset MediaTek) masih menyelesaikan
+    // handshake internal terhadap device tepat setelah izin USB baru diberikan,
+    // walau secara API sudah "granted". Kalau kita langsung claim + langsung
+    // transfer, transfer pertama bisa silent-timeout meski claim_interface
+    // sendiri sukses. Kasih jeda kecil dulu sebelum mencoba claim.
+    usleep(300000); // 300ms
+
+    const int MAX_CLAIM_ATTEMPTS = 3;
+    int r = 0;
+    for (int attempt = 1; attempt <= MAX_CLAIM_ATTEMPTS; attempt++) {
+        r = libusb_claim_interface(g_handle, 0);
+        if (r == 0) {
+            break;
+        }
+
+        LOGE("libusb_claim_interface gagal (percobaan %d/%d): %d (%s)",
+             attempt, MAX_CLAIM_ATTEMPTS, r, libusb_error_name(r));
+
+        if (attempt < MAX_CLAIM_ATTEMPTS) {
+            usleep(400000); // 400ms sebelum retry
+        }
+    }
+
     if (r < 0) {
-        LOGE("libusb_claim_interface gagal: %d (%s)", r, libusb_error_name(r));
+        LOGE("libusb_claim_interface GAGAL TOTAL setelah %d percobaan", MAX_CLAIM_ATTEMPTS);
         return JNI_FALSE;
     }
 
     LOGI("libusb_claim_interface BERHASIL!");
+
+    // Reset kemungkinan state "halt/stall" yang tersisa di endpoint dari
+    // sesi sebelumnya. claim_interface TIDAK menyentuh state ini sama
+    // sekali, dan beberapa host USB controller (terutama di chipset
+    // non-Qualcomm) bisa meninggalkan endpoint dalam kondisi halted
+    // walau device sudah di-enumerate ulang. Kalau ini terjadi, semua
+    // bulk transfer akan timeout dari percobaan pertama -- persis gejala
+    // yang kita lihat di beberapa device MediaTek.
+    int rClearRead = libusb_clear_halt(g_handle, EP_READ);
+    int rClearWrite = libusb_clear_halt(g_handle, EP_WRITE);
+    int rClearIntr = libusb_clear_halt(g_handle, EP_INTERRUPT);
+    LOGI("clear_halt EP_READ=%d(%s) EP_WRITE=%d(%s) EP_INTERRUPT=%d(%s)",
+         rClearRead, libusb_error_name(rClearRead),
+         rClearWrite, libusb_error_name(rClearWrite),
+         rClearIntr, libusb_error_name(rClearIntr));
+
+    // Jeda tambahan kecil setelah claim sukses, sebelum command PTP pertama
+    // dikirim dari sisi Kotlin. Ini murah (300ms) dan hanya terjadi sekali
+    // per sesi, tapi meredam race condition di atas pada device yang rawan.
+    usleep(300000);
+
     return JNI_TRUE;
 }
 
