@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RoamingPhotobooth — Admin Queue</title>
+
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<style>
+  :root{
+    --paper: #FAF6EE;
+    --ink: #2A241D;
+    --muted: #8A8072;
+    --accent: #E8593D;
+    --ok: #3E7C5A;
+    --warn: #B3452F;
+    --line: rgba(31,27,22,0.1);
+  }
+  *{ box-sizing: border-box; }
+  html, body{ margin:0; padding:0; background: var(--paper); color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body{ padding: 24px; max-width: 900px; margin: 0 auto; }
+  h1{ font-size: 20px; margin: 0 0 4px; }
+  .sub{ color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+
+  /* ---- Login form ---- */
+  #login-box{ max-width: 320px; margin: 60px auto; background: #fff; border: 1px solid var(--line);
+    border-radius: 6px; padding: 24px; }
+  #login-box input{ width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid var(--line);
+    border-radius: 4px; font-size: 14px; }
+  #login-box button{ width: 100%; padding: 10px; background: var(--accent); color: #fff; border: none;
+    border-radius: 4px; font-weight: 600; cursor: pointer; }
+  #login-error{ color: var(--warn); font-size: 12px; margin-top: 8px; min-height: 16px; }
+
+  /* ---- Dashboard ---- */
+  #dashboard{ display: none; }
+  .topbar{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .logout{ font-size: 12px; color: var(--muted); cursor: pointer; text-decoration: underline; background: none; border: none; }
+
+  .tabs{ display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab{ padding: 6px 14px; border-radius: 20px; font-size: 13px; cursor: pointer; border: 1px solid var(--line);
+    background: #fff; color: var(--muted); }
+  .tab.active{ background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  table{ width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden;
+    border: 1px solid var(--line); }
+  th, td{ text-align: left; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--line); }
+  th{ color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr:last-child td{ border-bottom: none; }
+
+  .badge{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge.uploading{ background: #FDEEDC; color: #A9631A; }
+  .badge.ready{ background: #E1F0E6; color: var(--ok); }
+  .badge.failed{ background: #FBE2DD; color: var(--warn); }
+
+  .slug{ font-family: monospace; font-size: 11px; color: var(--muted); }
+  .empty{ text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+  a.link{ color: var(--accent); font-size: 12px; }
+</style>
+</head>
+<body>
+
+  <div id="login-box">
+    <h1>Admin Queue</h1>
+    <p class="sub">RoamingPhotobooth</p>
+    <input id="email" type="email" placeholder="Email admin">
+    <input id="password" type="password" placeholder="Password">
+    <button id="login-btn">Masuk</button>
+    <div id="login-error"></div>
+  </div>
+
+  <div id="dashboard">
+    <div class="topbar">
+      <div>
+        <h1>Queue Foto</h1>
+        <p class="sub">Update realtime — tidak perlu refresh</p>
+      </div>
+      <button class="logout" id="logout-btn">Keluar</button>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-filter="all">Semua</div>
+      <div class="tab" data-filter="uploading">Sedang Upload</div>
+      <div class="tab" data-filter="ready">Selesai</div>
+      <div class="tab" data-filter="failed">Gagal</div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Status</th>
+          <th>Percobaan</th>
+          <th>Update Terakhir</th>
+          <th>Link</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty-state" class="empty" style="display:none;">Belum ada foto di queue.</div>
+  </div>
+
+<script>
+  // ============================================================
+  // KONFIGURASI — SAMA PERSIS dengan yang ada di hosting/public/index.html
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyAiALoD3nxyHCIZ33HD9zPS6kWVP7KTI_o",
+    authDomain: "roamingphotobooth.firebaseapp.com",
+    projectId: "roamingphotobooth",
+    storageBucket: "roamingphotobooth.firebasestorage.app",
+    messagingSenderId: "397560733851",
+    appId: "1:397560733851:web:3e538f485dc965c8f3a63e"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db = firebase.firestore();
+
+  const loginBox = document.getElementById('login-box');
+  const dashboard = document.getElementById('dashboard');
+  const loginError = document.getElementById('login-error');
+  const rowsBody = document.getElementById('rows');
+  const emptyState = document.getElementById('empty-state');
+
+  let unsubscribeQueue = null;
+  let allDocs = [];
+  let activeFilter = 'all';
+
+  // ---- Login ----
+  document.getElementById('login-btn').addEventListener('click', () => {
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    loginError.textContent = '';
+    auth.signInWithEmailAndPassword(email, password).catch((err) => {
+      loginError.textContent = 'Login gagal: email/password salah, atau akun ini belum terdaftar sebagai admin.';
+    });
+  });
+
+  document.getElementById('logout-btn').addEventListener('click', () => auth.signOut());
+
+  auth.onAuthStateChanged((user) => {
+    if (unsubscribeQueue) { unsubscribeQueue(); unsubscribeQueue = null; }
+
+    if (user) {
+      loginBox.style.display = 'none';
+      dashboard.style.display = 'block';
+      startQueueListener();
+    } else {
+      loginBox.style.display = 'block';
+      dashboard.style.display = 'none';
+      rowsBody.innerHTML = '';
+    }
+  });
+
+  // ---- Queue listener ----
+  // Kalau akun berhasil login TAPI tidak terdaftar di koleksi `admins`,
+  // Firestore rules bakal nolak query ini (permission-denied) -- itu wajar,
+  // artinya akunnya belum di-whitelist (lihat SETUP_FIREBASE.md).
+  function startQueueListener() {
+    unsubscribeQueue = db.collection('photos')
+      .orderBy('updatedAt', 'desc')
+      .limit(200)
+      .onSnapshot(
+        (snapshot) => {
+          allDocs = snapshot.docs.map(d => ({ slug: d.id, ...d.data() }));
+          render();
+        },
+        (error) => {
+          console.error('Queue listener error:', error);
+          rowsBody.innerHTML = '';
+          emptyState.style.display = 'block';
+          emptyState.textContent = 'Gagal memuat queue: ' + error.message +
+            ' (kemungkinan akun ini belum terdaftar sebagai admin).';
+        }
+      );
+  }
+
+  // ---- Tabs ----
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeFilter = tab.dataset.filter;
+      render();
+    });
+  });
+
+  // ---- Render ----
+  function render() {
+    const filtered = activeFilter === 'all'
+      ? allDocs
+      : allDocs.filter(d => d.status === activeFilter);
+
+    if (filtered.length === 0) {
+      rowsBody.innerHTML = '';
+      emptyState.style.display = 'block';
+      emptyState.textContent = 'Belum ada foto di queue.';
+      return;
+    }
+    emptyState.style.display = 'none';
+
+    rowsBody.innerHTML = filtered.map(d => `
+      <tr>
+        <td>
+          ${escapeHtml(d.fileName || '(belum ada nama)')}<br>
+          <span class="slug">${escapeHtml(d.slug)}</span>
+        </td>
+        <td><span class="badge ${d.status || 'uploading'}">${escapeHtml(d.status || 'uploading')}</span></td>
+        <td>${escapeHtml(d.attempt || '-')}</td>
+        <td>${formatTime(d.updatedAt)}</td>
+        <td>${d.driveUrl ? `<a class="link" href="${escapeHtml(d.driveUrl)}" target="_blank" rel="noopener">Buka Drive</a>` : (d.error ? escapeHtml(d.error) : '-')}</td>
+      </tr>
+    `).join('');
+  }
+
+  function formatTime(iso){
+    if (!iso) return '-';
+    try {
+      const date = new Date(iso);
+      return date.toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: 'short' });
+    } catch { return iso; }
+  }
+
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, (c) => ({
+      '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+    }[c]));
+  }
+</script>
+
+</body>
+</html>

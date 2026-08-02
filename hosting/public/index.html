@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Ambil Foto Kamu</title>
+
+<!-- Firebase SDK (compat, paling gampang dipakai tanpa build tool) -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+
+<style>
+  :root{
+    --paper: #FAF6EE;
+    --frame: #1F1B16;
+    --accent: #E8593D;
+    --accent-soft: #F4D9CC;
+    --ink: #2A241D;
+    --muted: #8A8072;
+    --ok: #3E7C5A;
+  }
+
+  *{ box-sizing: border-box; }
+
+  html, body{
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  body{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .card{
+    width: 100%;
+    max-width: 380px;
+    background: #fff;
+    border: 1px solid rgba(31,27,22,0.08);
+    border-radius: 4px;
+    padding: 28px 24px 32px;
+    box-shadow: 0 1px 2px rgba(31,27,22,0.04), 0 12px 32px rgba(31,27,22,0.06);
+    text-align: center;
+    position: relative;
+  }
+
+  .clip{
+    position: absolute;
+    top: -14px;
+    left: 50%;
+    transform: translateX(-50%) rotate(-4deg);
+    width: 46px;
+    height: 20px;
+    background: var(--accent);
+    border-radius: 3px;
+  }
+
+  .eyebrow{
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 6px 0 4px;
+  }
+
+  h1{
+    font-size: 20px;
+    margin: 0 0 20px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .stage{ display: none; }
+  .stage.active{ display: block; }
+
+  .spinner{
+    width: 40px;
+    height: 40px;
+    margin: 8px auto 18px;
+    border-radius: 50%;
+    border: 3px solid var(--accent-soft);
+    border-top-color: var(--accent);
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .msg{
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  .dots::after{
+    content: '';
+    animation: dots 1.4s steps(4,end) infinite;
+  }
+  @keyframes dots{
+    0%{ content: ''; }
+    25%{ content: '.'; }
+    50%{ content: '..'; }
+    75%, 100%{ content: '...'; }
+  }
+
+  .check{
+    width: 44px;
+    height: 44px;
+    margin: 4px auto 18px;
+    border-radius: 50%;
+    background: var(--ok);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .check svg{ width: 22px; height: 22px; }
+
+  .btn{
+    display: block;
+    width: 100%;
+    margin-top: 20px;
+    padding: 14px 18px;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 15px;
+    border-radius: 3px;
+    letter-spacing: 0.01em;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .btn:active{ transform: scale(0.98); }
+
+  .hint{
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .warn{
+    width: 44px;
+    height: 44px;
+    margin: 4px auto 18px;
+    border-radius: 50%;
+    background: #B3452F;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+  }
+
+  .notfound .msg{ margin-top: 4px; }
+
+  footer{
+    margin-top: 26px;
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <div class="clip"></div>
+    <div class="eyebrow">Photobooth</div>
+
+    <!-- STATE: loading (lagi cek Firestore) -->
+    <div id="stage-checking" class="stage active">
+      <h1>Menyiapkan foto kamu</h1>
+      <div class="spinner"></div>
+      <p class="msg">Sebentar ya<span class="dots"></span></p>
+    </div>
+
+    <!-- STATE: uploading -->
+    <div id="stage-uploading" class="stage">
+      <h1>Foto sedang diproses</h1>
+      <div class="spinner"></div>
+      <p class="msg">Halaman ini akan otomatis update begitu foto kamu siap<span class="dots"></span></p>
+      <p class="hint">Kalau sinyal di lokasi lagi lemah, proses ini bisa makan waktu lebih lama — nggak perlu scan ulang, cukup tunggu di halaman ini.</p>
+    </div>
+
+    <!-- STATE: ready -->
+    <div id="stage-ready" class="stage">
+      <div class="check">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M4 12L9.5 17.5L20 6" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h1>Foto kamu siap!</h1>
+      <p class="msg">Ketuk tombol di bawah untuk menyimpan foto ke galeri.</p>
+      <a id="download-link" class="btn" href="#" target="_blank" rel="noopener">Unduh Foto</a>
+    </div>
+
+    <!-- STATE: failed -->
+    <div id="stage-failed" class="stage">
+      <div class="warn">!</div>
+      <h1>Ada kendala</h1>
+      <p class="msg">Foto gagal diproses. Silakan hubungi petugas photobooth untuk bantuan.</p>
+    </div>
+
+    <!-- STATE: not found -->
+    <div id="stage-notfound" class="stage notfound">
+      <div class="warn">?</div>
+      <h1>Foto tidak ditemukan</h1>
+      <p class="msg">Link ini sepertinya tidak valid. Coba scan ulang QR Code dari layar photobooth.</p>
+    </div>
+
+    <footer>Dibuat khusus untuk kamu hari ini</footer>
+  </div>
+
+<script>
+  // ============================================================
+  // 1. KONFIGURASI FIREBASE — ganti dengan config project kamu
+  //    (Project Settings → General → Your apps → SDK setup)
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyAiALoD3nxyHCIZ33HD9zPS6kWVP7KTI_o",
+    authDomain: "roamingphotobooth.firebaseapp.com",
+    projectId: "roamingphotobooth",
+    storageBucket: "roamingphotobooth.firebasestorage.app",
+    messagingSenderId: "397560733851",
+    appId: "1:397560733851:web:3e538f485dc965c8f3a63e"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  // ============================================================
+  // 2. AMBIL SLUG DARI URL
+  //    Mendukung dua format:
+  //      https://domain.com/p/abc123   (pakai hosting rewrite, lihat firebase.json)
+  //      https://domain.com/?slug=abc123  (fallback tanpa rewrite)
+  // ============================================================
+  function getSlug(){
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('slug')) return params.get('slug');
+
+    const path = window.location.pathname; // contoh: /p/abc123
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length >= 2 && parts[0] === 'p') return parts[1];
+
+    return null;
+  }
+
+  // Dipakai buat bedain "slug jelas ngasal" vs "slug valid tapi dokumennya
+  // belum sempat sinkron ke server" (lihat GRACE_PERIOD_MS di bawah).
+  function looksLikeValidSlug(slug){
+    return /^[0-9a-f-]{20,40}$/i.test(slug);
+  }
+
+  const slug = getSlug();
+
+  // ============================================================
+  // 3. TAMPILKAN STAGE YANG SESUAI
+  // ============================================================
+  const stages = ['checking', 'uploading', 'ready', 'failed', 'notfound'];
+  function showStage(name){
+    stages.forEach(s => {
+      document.getElementById('stage-' + s).classList.toggle('active', s === name);
+    });
+  }
+
+  // ============================================================
+  // 4. GRACE PERIOD — kalau booth-nya lagi offline pas foto diambil,
+  //    dokumen Firestore "uploading" itu sendiri bisa telat sampai ke
+  //    server (device booth nulisnya nunggu koneksi juga). Tanpa ini,
+  //    pengunjung yang scan QR duluan bisa lihat "notfound" padahal
+  //    fotonya sebenarnya cuma lagi antre. Jadi: selama slug formatnya
+  //    valid dan grace period belum habis, anggap "uploading" dulu.
+  // ============================================================
+  const GRACE_PERIOD_MS = 45000;
+  let graceExpired = false;
+  let lastKnownDocExists = null;
+
+  if (slug && looksLikeValidSlug(slug)) {
+    setTimeout(() => {
+      graceExpired = true;
+      if (lastKnownDocExists === false) showStage('notfound');
+    }, GRACE_PERIOD_MS);
+  }
+
+  // ============================================================
+  // 5. REALTIME LISTENER — otomatis update tanpa refresh manual
+  // ============================================================
+  if (!slug || !looksLikeValidSlug(slug)) {
+    showStage('notfound');
+  } else {
+    db.collection('photos').doc(slug).onSnapshot(
+      (doc) => {
+        lastKnownDocExists = doc.exists;
+
+        if (!doc.exists) {
+          showStage(graceExpired ? 'notfound' : 'uploading');
+          return;
+        }
+
+        const data = doc.data();
+
+        if (data.status === 'ready' && data.driveUrl) {
+          document.getElementById('download-link').href = data.driveUrl;
+          showStage('ready');
+        } else if (data.status === 'failed') {
+          showStage('failed');
+        } else {
+          // status: "uploading" atau state lain yang belum final
+          showStage('uploading');
+        }
+      },
+      (error) => {
+        console.error('Firestore error:', error);
+        showStage('failed');
+      }
+    );
+  }
+</script>
+
+</body>
+</html>

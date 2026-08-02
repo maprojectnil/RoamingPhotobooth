@@ -1,0 +1,17 @@
+# Salin file ini jadi `gradle.properties` (root project, sejajar settings.gradle),
+# isi semua value di bawah, JANGAN di-commit (sudah di-.gitignore).
+
+# --- Google Drive (OAuth refresh token, sudah ada sebelumnya) ---
+DRIVE_FOLDER_ID=
+DRIVE_OAUTH_CLIENT_ID=
+DRIVE_OAUTH_CLIENT_SECRET=
+DRIVE_OAUTH_REFRESH_TOKEN=
+
+# --- Firebase (baru, untuk status tracking + landing page) ---
+# Project ID Firebase, contoh: roaming-photobooth-a1b2c
+FIRESTORE_PROJECT_ID=
+# Web API key project (Project settings -> General -> Web API Key)
+FIREBASE_WEB_API_KEY=
+# Base URL Firebase Hosting, TANPA trailing slash
+# contoh: https://roaming-photobooth-a1b2c.web.app
+LANDING_BASE_URL=
