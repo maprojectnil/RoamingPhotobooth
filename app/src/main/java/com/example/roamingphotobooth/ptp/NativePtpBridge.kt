@@ -9,6 +9,8 @@ object NativePtpBridge {
     external fun openDeviceWithFd(fd: Int): Boolean
     external fun claimInterface(): Boolean
     external fun bulkWrite(data: ByteArray): Int
-    external fun bulkRead(buffer: ByteArray, maxLen: Int): Int
+    // timeoutMs punya default 5000 (nilai lama, hardcoded di sisi native
+    // sebelum ini) supaya pemanggil lain yang belum di-update tetap kompatibel.
+    external fun bulkRead(buffer: ByteArray, maxLen: Int, timeoutMs: Int = 5000): Int
     external fun closeDevice()
 }

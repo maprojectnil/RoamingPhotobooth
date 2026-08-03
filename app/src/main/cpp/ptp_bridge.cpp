@@ -127,13 +127,13 @@ Java_com_example_roamingphotobooth_ptp_NativePtpBridge_bulkWrite(JNIEnv *env, jo
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_roamingphotobooth_ptp_NativePtpBridge_bulkRead(JNIEnv *env, jobject, jbyteArray buffer, jint maxLen) {
+Java_com_example_roamingphotobooth_ptp_NativePtpBridge_bulkRead(JNIEnv *env, jobject, jbyteArray buffer, jint maxLen, jint timeoutMs) {
     if (g_handle == nullptr) return -1;
 
     unsigned char *nativeBuffer = new unsigned char[maxLen];
     int transferred = 0;
 
-    int r = libusb_bulk_transfer(g_handle, EP_READ, nativeBuffer, maxLen, &transferred, USB_TIMEOUT_MS);
+    int r = libusb_bulk_transfer(g_handle, EP_READ, nativeBuffer, maxLen, &transferred, (unsigned int) timeoutMs);
 
     if (r < 0) {
         LOGE("bulkRead gagal: %d (%s)", r, libusb_error_name(r));

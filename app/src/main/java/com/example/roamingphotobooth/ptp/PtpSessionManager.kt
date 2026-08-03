@@ -28,18 +28,69 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
     companion object {
         private const val TAG = "PtpSessionManager"
 
-        // GANTI dari READ_BUFFER_SIZE = 1MB (baca buta sekaligus). Dari studi
-        // qDslrDashboard (aplikasi PTP-over-USB Android lain yang terbukti
-        // stabil di device serupa) dan NativeUsbBulkTest kita sendiri: baca
-        // PERTAMA selalu dibatasi kecil (512 byte) -- di titik itu panjang
-        // paket belum diketahui, baru kelihatan dari 4 byte pertama header
-        // setelah baca ini selesai. Lihat [readPtpContainerRaw].
-        private const val READ_CHUNK_SIZE = 512
+        // GANTI dari READ_BUFFER_SIZE = 1MB (baca buta sekaligus) DAN dari
+        // versi sebelumnya yang fixed 512 byte di semua baca (aman tapi bikin
+        // 1 frame live view ~192KB perlu ~375 round-trip USB -- overhead itu
+        // sendiri yang bikin live view patah-patah, terlepas dari poll 50ms).
+        //
+        // Sekarang ADAPTIF: coba ukuran PALING BESAR dulu ([CHUNK_SIZE_CANDIDATES]
+        // dari besar ke kecil). Begitu satu ukuran gagal baca, turun ke kandidat
+        // berikutnya (lihat [stepDownChunkSize]) -- dan begitu satu ukuran
+        // TERBUKTI jalan, ukuran itu DIINGAT di [currentChunkSizeIndex] lalu
+        // dipakai terus untuk SISA SESI. Tidak coba-coba dari besar lagi di tiap
+        // frame -- itu cuma bakal gagal dulu tiap kali sebelum turun lagi, buang
+        // waktu persis di jalur yang paling sering dipanggil (~20x/detik).
+        // 512 tetap jadi kandidat PALING KECIL/terakhir sebagai jaring pengaman,
+        // karena itu satu-satunya ukuran yang terbukti SELALU sukses di host
+        // MediaTek/MIUI yang jadi acuan awal.
+        private val CHUNK_SIZE_CANDIDATES = intArrayOf(65536, 32768, 16384, 8192, 4096, 2048, 1024, 512)
 
         // Batas aman terhadap header yang rusak/nyasar (misal device kirim
         // sampah karena state PTP-nya kacau) -- kalau angka panjang di header
         // melebihi ini, jangan coba alokasikan buffer segitu besar.
         private const val MAX_CONTAINER_SIZE = 100 * 1024 * 1024 // 100MB
+    }
+
+    // Index kandidat chunk size yang lagi aktif dipakai. Mulai dari 0 (kandidat
+    // TERBESAR di CHUNK_SIZE_CANDIDATES). Naik (ukuran mengecil) tiap kali baca
+    // gagal, lewat [stepDownChunkSize] -- dan TIDAK PERNAH turun balik sendiri ke
+    // ukuran besar lagi dalam sesi yang sama, supaya tidak berulang kali gagal
+    // percobaan besar padahal host sudah terbukti cuma sanggup ukuran kecil.
+    private var currentChunkSizeIndex = 0
+    private val currentChunkSize: Int get() = CHUNK_SIZE_CANDIDATES[currentChunkSizeIndex]
+
+    // Ukuran mana saja yang SUDAH PERNAH terbukti berhasil baca sekurang-kurangnya
+    // sekali. Dipakai buat [readTimeoutForCurrentChunkSize] -- lihat di bawah.
+    private val provenChunkSizeIndices = mutableSetOf<Int>()
+
+    /**
+     * Turunkan ukuran chunk baca ke kandidat berikutnya yang lebih kecil (dipanggil
+     * saat satu percobaan baca gagal). Return false kalau sudah di kandidat
+     * TERKECIL (512, jaring pengaman terakhir) -- di titik itu kegagalan bukan lagi
+     * soal ukuran chunk, jadi pemanggil harus lanjut ke logika retry/sleep biasa.
+     */
+    private fun stepDownChunkSize(): Boolean {
+        if (currentChunkSizeIndex >= CHUNK_SIZE_CANDIDATES.size - 1) return false
+        currentChunkSizeIndex++
+        Log.w(TAG, "Turunkan ukuran chunk baca USB ke $currentChunkSize byte (percobaan sebelumnya gagal di ukuran lebih besar)")
+        return true
+    }
+
+    /**
+     * Timeout buat 1 percobaan baca di [currentChunkSize]. Kalau ukuran ini BELUM
+     * pernah terbukti berhasil ("belum proven"), pakai timeout PENDEK (1500ms) --
+     * supaya kalau kegagalan di ukuran besar berupa USB timeout (bukan gagal
+     * instan), proses turun ke ukuran yang lebih kecil tetap cepat (maks ~1.5 detik
+     * per kandidat, bukan 10 detik). Begitu ukuran ini pernah terbukti berhasil
+     * sekali, pakai timeout NORMAL (10000ms) seterusnya -- supaya ukuran yang
+     * sudah terbukti jalan tidak jadi gampang di-anggap gagal cuma gara-gara
+     * kamera lagi agak lambat sesaat (misal lagi fokus/proses internal).
+     */
+    private fun readTimeoutForCurrentChunkSize(): Int =
+        if (currentChunkSizeIndex in provenChunkSizeIndices) 10000 else 1500
+
+    private fun markCurrentChunkSizeProven() {
+        provenChunkSizeIndices.add(currentChunkSizeIndex)
     }
 
     fun startSession() {
@@ -91,15 +142,18 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
      * APK-nya sendiri, bukan disalin, diimplementasikan ulang di sini), lalu
      * disesuaikan lebih lanjut berdasar observasi lapangan di host kita:
      *
-     * 1. Baca AWAL selalu dibatasi [READ_CHUNK_SIZE] (512 byte) -- di titik
-     *    ini kita belum tahu ukuran total paket.
+     * 1. Baca AWAL pakai [currentChunkSize] -- ukuran ADAPTIF, mulai dari
+     *    kandidat paling besar di [CHUNK_SIZE_CANDIDATES] dan turun sendiri
+     *    kalau gagal (lihat [stepDownChunkSize]). Di titik ini kita belum
+     *    tahu ukuran total paket.
      * 2. Ambil panjang total dari 4 byte pertama (header PTP).
      * 3. Kalau paketnya lebih besar dari yang sudah kebaca, baca SISANYA
-     *    juga per-chunk [READ_CHUNK_SIZE] (BUKAN sekaligus dalam 1
-     *    bulkTransfer besar seperti qDslrDashboard) -- terbukti host USB
-     *    (MediaTek/MIUI) kita ini gagal kalau diminta satu bulkTransfer besar
-     *    (misal ~192KB buat 1 frame live view), walau permintaan 512-byte
-     *    SELALU sukses. Lebih banyak round-trip, tapi terbukti stabil.
+     *    juga per-chunk [currentChunkSize] (BUKAN sekaligus dalam 1
+     *    bulkTransfer besar seperti qDslrDashboard) -- versi awal host USB
+     *    (MediaTek/MIUI) kita terbukti gagal kalau diminta satu bulkTransfer
+     *    besar (misal ~192KB buat 1 frame live view), tapi ukuran yang masih
+     *    reliable belum tentu sekecil 512 byte -- makanya sekarang dicoba
+     *    besar dulu, bukan langsung dipatok kecil.
      *
      * Ini menggantikan pendekatan lama (baca 1MB langsung di setiap
      * pemanggilan) yang terbukti di lapangan SELALU gagal (instan atau
@@ -112,18 +166,26 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
         var firstReadLen = 0
         var attempts = 0
         while (attempts < 5) {
-            val chunk = ByteArray(READ_CHUNK_SIZE)
-            val n = usbConnection.read(chunk)
+            val chunk = ByteArray(currentChunkSize)
+            val n = usbConnection.read(chunk, readTimeoutForCurrentChunkSize())
             if (n > 0) {
+                markCurrentChunkSizeProven()
                 firstChunk = chunk
                 firstReadLen = n
                 break
             }
-            attempts++
-            Thread.sleep(1)
+            // Kalau masih ada kandidat ukuran lebih kecil, turun & coba LAGI SEGERA
+            // (bukan nunggu 5x gagal dulu di ukuran yang sama) -- kegagalan di
+            // ukuran besar biasanya memang soal ukurannya, bukan soal transient.
+            // Ini TIDAK menghabiskan jatah "attempts" supaya penurunan bertahap ke
+            // semua kandidat tidak kena limit 5x sebelum sempat coba yang terkecil.
+            if (!stepDownChunkSize()) {
+                attempts++
+                Thread.sleep(1)
+            }
         }
         if (firstChunk == null) {
-            Log.w(TAG, "readPtpContainerRaw: baca pertama gagal 5x berturut-turut")
+            Log.w(TAG, "readPtpContainerRaw: baca pertama gagal 5x berturut-turut (ukuran chunk saat ini: $currentChunkSize byte)")
             return null
         }
         if (firstReadLen < PtpContainer.HEADER_SIZE) {
@@ -143,11 +205,15 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
 
         // Masih ada sisa -- assemble ke buffer akhir yang pas ukurannya. BEDA
         // dari qDslrDashboard (yang minta sisanya SEKALIGUS dalam 1 bulkTransfer
-        // besar): dari observasi lapangan, host USB (MediaTek/MIUI) ini terbukti
-        // GAGAL kalau diminta satu bulkTransfer besar (misal 192KB buat 1 frame
-        // live view) walau permintaan 512-byte SELALU sukses. Jadi di sini kita
-        // tetap CHUNK semua baca lanjutan ke kelipatan READ_CHUNK_SIZE juga --
-        // lebih banyak round-trip, tapi terbukti stabil di host yang rewel ini.
+        // besar): dari observasi lapangan awal, host USB (MediaTek/MIUI) ini
+        // terbukti GAGAL kalau diminta satu bulkTransfer besar (misal 192KB buat
+        // 1 frame live view) walau permintaan 512-byte SELALU sukses. Jadi di sini
+        // kita tetap CHUNK semua baca lanjutan -- TAPI sekarang pakai
+        // [currentChunkSize] yang ADAPTIF (coba besar dulu, turun kalau gagal,
+        // diingat untuk sisa sesi -- lihat companion object) bukan 512 tetap.
+        // Ini yang paling menentukan buat live view: 1 frame ~192KB @ 512B fix
+        // = ~375 round-trip USB; kalau host ternyata sanggup mis. 16KB, cuma
+        // ~12 round-trip -- itu selisih besar yang kelihatan sebagai patah-patah.
         val result = ByteArray(totalLength)
         System.arraycopy(firstChunk, 0, result, 0, firstReadLen)
         var totalReceived = firstReadLen
@@ -155,15 +221,23 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
 
         while (totalReceived < totalLength) {
             val remaining = totalLength - totalReceived
-            val requestLen = minOf(remaining, READ_CHUNK_SIZE)
-            val n = usbConnection.readInto(result, totalReceived, requestLen)
+            val requestLen = minOf(remaining, currentChunkSize)
+            val n = usbConnection.readInto(result, totalReceived, requestLen, readTimeoutForCurrentChunkSize())
             if (n > 0) {
+                markCurrentChunkSizeProven()
                 consecutiveFailures = 0
                 totalReceived += n
             } else {
                 consecutiveFailures++
+                // Kalau masih ada kandidat lebih kecil, turun & coba LAGI SEGERA
+                // dengan requestLen yang baru (dihitung ulang di iterasi while
+                // berikutnya) -- jangan langsung hitung sebagai salah satu dari
+                // 5 "gagal berturut-turut" kalau penyebabnya memang ukurannya.
+                if (stepDownChunkSize()) {
+                    continue
+                }
                 if (consecutiveFailures >= 5) {
-                    Log.w(TAG, "readPtpContainerRaw: gagal baca data lanjutan 5x berturut-turut ($totalReceived/$totalLength byte)")
+                    Log.w(TAG, "readPtpContainerRaw: gagal baca data lanjutan 5x berturut-turut ($totalReceived/$totalLength byte, ukuran chunk saat ini: $currentChunkSize byte)")
                     return null
                 }
                 Thread.sleep(1)
