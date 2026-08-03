@@ -2,11 +2,9 @@ package com.example.roamingphotobooth.ptp
 
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -17,7 +15,11 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
     private val knownObjectIds = mutableSetOf<Int>()
 
     private var eventListenerJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO + Job())
+    // PENTING: pakai PtpNativeConnection.usbDispatcher (thread tunggal khusus),
+    // BUKAN Dispatchers.IO -- lihat catatan lengkap di PtpNativeConnection.
+    // claimInterface() (di PtpNativeConnection.open()) dan semua write()/read()
+    // di sini harus jalan di thread OS yang sama persis.
+    private val scope = CoroutineScope(PtpNativeConnection.usbDispatcher + Job())
 
     var onNewPhotoCaptured: ((ByteArray) -> Unit)? = null
     var onSessionReady: (() -> Unit)? = null
@@ -25,7 +27,19 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
 
     companion object {
         private const val TAG = "PtpSessionManager"
-        private const val READ_BUFFER_SIZE = 1024 * 1024
+
+        // GANTI dari READ_BUFFER_SIZE = 1MB (baca buta sekaligus). Dari studi
+        // qDslrDashboard (aplikasi PTP-over-USB Android lain yang terbukti
+        // stabil di device serupa) dan NativeUsbBulkTest kita sendiri: baca
+        // PERTAMA selalu dibatasi kecil (512 byte) -- di titik itu panjang
+        // paket belum diketahui, baru kelihatan dari 4 byte pertama header
+        // setelah baca ini selesai. Lihat [readPtpContainerRaw].
+        private const val READ_CHUNK_SIZE = 512
+
+        // Batas aman terhadap header yang rusak/nyasar (misal device kirim
+        // sampah karena state PTP-nya kacau) -- kalau angka panjang di header
+        // melebihi ini, jangan coba alokasikan buffer segitu besar.
+        private const val MAX_CONTAINER_SIZE = 100 * 1024 * 1024 // 100MB
     }
 
     fun startSession() {
@@ -69,6 +83,95 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
 
     private var lastObjectCheckTime = 0L
     private val OBJECT_CHECK_INTERVAL_MS = 3000L // cek foto baru tiap 3 detik saja
+
+    /**
+     * Baca 1 paket PTP LENGKAP dari endpoint IN. Berawal dari studi
+     * readPtpPacketEP() di qDslrDashboard (aplikasi PTP-over-USB Android lain
+     * yang terbukti stabil di device serupa -- dipelajari lewat decompile
+     * APK-nya sendiri, bukan disalin, diimplementasikan ulang di sini), lalu
+     * disesuaikan lebih lanjut berdasar observasi lapangan di host kita:
+     *
+     * 1. Baca AWAL selalu dibatasi [READ_CHUNK_SIZE] (512 byte) -- di titik
+     *    ini kita belum tahu ukuran total paket.
+     * 2. Ambil panjang total dari 4 byte pertama (header PTP).
+     * 3. Kalau paketnya lebih besar dari yang sudah kebaca, baca SISANYA
+     *    juga per-chunk [READ_CHUNK_SIZE] (BUKAN sekaligus dalam 1
+     *    bulkTransfer besar seperti qDslrDashboard) -- terbukti host USB
+     *    (MediaTek/MIUI) kita ini gagal kalau diminta satu bulkTransfer besar
+     *    (misal ~192KB buat 1 frame live view), walau permintaan 512-byte
+     *    SELALU sukses. Lebih banyak round-trip, tapi terbukti stabil.
+     *
+     * Ini menggantikan pendekatan lama (baca 1MB langsung di setiap
+     * pemanggilan) yang terbukti di lapangan SELALU gagal (instan atau
+     * timeout) di kombinasi host MediaTek/MIUI + kamera Canon tertentu.
+     *
+     * Return null kalau gagal di titik manapun.
+     */
+    private fun readPtpContainerRaw(): ByteArray? {
+        var firstChunk: ByteArray? = null
+        var firstReadLen = 0
+        var attempts = 0
+        while (attempts < 5) {
+            val chunk = ByteArray(READ_CHUNK_SIZE)
+            val n = usbConnection.read(chunk)
+            if (n > 0) {
+                firstChunk = chunk
+                firstReadLen = n
+                break
+            }
+            attempts++
+            Thread.sleep(1)
+        }
+        if (firstChunk == null) {
+            Log.w(TAG, "readPtpContainerRaw: baca pertama gagal 5x berturut-turut")
+            return null
+        }
+        if (firstReadLen < PtpContainer.HEADER_SIZE) {
+            Log.w(TAG, "readPtpContainerRaw: baca pertama cuma $firstReadLen byte, kurang dari header (${PtpContainer.HEADER_SIZE})")
+            return null
+        }
+
+        val totalLength = ByteBuffer.wrap(firstChunk, 0, 4).order(ByteOrder.LITTLE_ENDIAN).int
+
+        if (totalLength <= 0 || totalLength > MAX_CONTAINER_SIZE) {
+            Log.w(TAG, "readPtpContainerRaw: panjang header mencurigakan ($totalLength), pakai $firstReadLen byte yang sudah kebaca saja")
+            return firstChunk.copyOf(firstReadLen)
+        }
+        if (totalLength <= firstReadLen) {
+            return firstChunk.copyOf(firstReadLen)
+        }
+
+        // Masih ada sisa -- assemble ke buffer akhir yang pas ukurannya. BEDA
+        // dari qDslrDashboard (yang minta sisanya SEKALIGUS dalam 1 bulkTransfer
+        // besar): dari observasi lapangan, host USB (MediaTek/MIUI) ini terbukti
+        // GAGAL kalau diminta satu bulkTransfer besar (misal 192KB buat 1 frame
+        // live view) walau permintaan 512-byte SELALU sukses. Jadi di sini kita
+        // tetap CHUNK semua baca lanjutan ke kelipatan READ_CHUNK_SIZE juga --
+        // lebih banyak round-trip, tapi terbukti stabil di host yang rewel ini.
+        val result = ByteArray(totalLength)
+        System.arraycopy(firstChunk, 0, result, 0, firstReadLen)
+        var totalReceived = firstReadLen
+        var consecutiveFailures = 0
+
+        while (totalReceived < totalLength) {
+            val remaining = totalLength - totalReceived
+            val requestLen = minOf(remaining, READ_CHUNK_SIZE)
+            val n = usbConnection.readInto(result, totalReceived, requestLen)
+            if (n > 0) {
+                consecutiveFailures = 0
+                totalReceived += n
+            } else {
+                consecutiveFailures++
+                if (consecutiveFailures >= 5) {
+                    Log.w(TAG, "readPtpContainerRaw: gagal baca data lanjutan 5x berturut-turut ($totalReceived/$totalLength byte)")
+                    return null
+                }
+                Thread.sleep(1)
+            }
+        }
+
+        return result
+    }
 
     private fun startPollingLoop() {
         eventListenerJob = scope.launch {
@@ -147,9 +250,7 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
         val written = usbConnection.write(commandPacket)
         if (written < 0) return
 
-        val buffer = ByteArray(READ_BUFFER_SIZE)
-        val bytesRead = usbConnection.read(buffer)
-        if (bytesRead <= 0) return
+        if (readPtpContainerRaw() == null) return
 
         val responseBuffer = ByteArray(64)
         usbConnection.read(responseBuffer)
@@ -380,14 +481,13 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
             return null
         }
 
-        val buffer = ByteArray(READ_BUFFER_SIZE)
-        val bytesRead = usbConnection.read(buffer)
-        if (bytesRead <= 0) {
-            Log.e(TAG, "sendCommandAndGetData: read gagal (return $bytesRead) untuk 0x${Integer.toHexString(opCode)}")
+        val raw = readPtpContainerRaw()
+        if (raw == null) {
+            Log.e(TAG, "sendCommandAndGetData: read gagal untuk 0x${Integer.toHexString(opCode)}")
             return null
         }
 
-        val container = PtpContainer.parse(buffer, bytesRead)
+        val container = PtpContainer.parse(raw, raw.size)
 
         // LOG SELALU, supaya kita tahu persis apa yang dibalas kamera
         Log.d(TAG, "sendCommandAndGetData(0x${Integer.toHexString(opCode)}): container type=${container.containerType}, code=0x${Integer.toHexString(container.code)}, payloadSize=${container.payload.size}")
@@ -419,28 +519,13 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
             return
         }
 
-        val outputStream = ByteArrayOutputStream()
-        val readBuffer = ByteArray(READ_BUFFER_SIZE)
-        var totalExpectedSize = -1
-
-        var isFirstChunk = true
-        while (true) {
-            val bytesRead = usbConnection.read(readBuffer)
-            if (bytesRead <= 0) break
-
-            if (isFirstChunk) {
-                val lengthBuffer = ByteBuffer.wrap(readBuffer, 0, 4).order(ByteOrder.LITTLE_ENDIAN)
-                totalExpectedSize = lengthBuffer.int - PtpContainer.HEADER_SIZE
-                outputStream.write(readBuffer, PtpContainer.HEADER_SIZE, bytesRead - PtpContainer.HEADER_SIZE)
-                isFirstChunk = false
-            } else {
-                outputStream.write(readBuffer, 0, bytesRead)
-            }
-
-            if (totalExpectedSize in 1..outputStream.size()) break
+        val raw = readPtpContainerRaw()
+        if (raw == null) {
+            Log.e(TAG, "Gagal baca data foto (GetObject)")
+            return
         }
 
-        val photoBytes = outputStream.toByteArray()
+        val photoBytes = raw.copyOfRange(PtpContainer.HEADER_SIZE, raw.size)
         Log.i(TAG, "Foto berhasil di-download, ukuran: ${photoBytes.size} byte")
         onNewPhotoCaptured?.invoke(photoBytes)
 
@@ -462,15 +547,14 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
                 return@repeat
             }
 
-            val buffer = ByteArray(READ_BUFFER_SIZE)
-            val bytesRead = usbConnection.read(buffer)
-            if (bytesRead <= 0) {
+            val raw = readPtpContainerRaw()
+            if (raw == null) {
                 Log.w(TAG, "read() gagal (percobaan ${attempt + 1}), retry setelah delay...")
                 Thread.sleep(400)
                 return@repeat
             }
 
-            val container = PtpContainer.parse(buffer, bytesRead)
+            val container = PtpContainer.parse(raw, raw.size)
             Log.d(TAG, "Container diterima - type: ${container.containerType}, code: 0x${Integer.toHexString(container.code)}")
 
             if (container.containerType == PtpContainerType.RESPONSE) {
