@@ -78,6 +78,14 @@ class PtpNativeConnection(
     private var deviceKey: String = ""
     private var knownLibusbUnreliable = false
 
+    // Sekali kita sudah coba clear_halt reaktif + reopen koneksi total dan
+    // KEDUANYA tetap gagal, device dianggap benar-benar mati/putus (bukan lagi
+    // sekadar endpoint wedge) -- jangan coba bulkTransfer lagi sama sekali
+    // sesudah itu, supaya pemanggil (PtpSessionManager) gagal CEPAT (bukan
+    // nunggu 10-30 detik lagi tiap poll) dan bisa mengambil keputusan di
+    // level sesi/UI. Direset ke false kalau reopen berikutnya berhasil.
+    private var connectionDead = false
+
     fun open(): Boolean {
         // Cari interface still-image (PTP) & endpoint bulk IN/OUT dari descriptor
         // device -- ini TIDAK butuh koneksi terbuka sama sekali (UsbDevice.getInterface
@@ -286,7 +294,45 @@ class PtpNativeConnection(
         Log.i(TAG, "clearHaltNative endpoint=0x${ep.address.toString(16)} hasil=$result")
     }
 
+    /**
+     * Eskalasi terakhir sebelum menyerah: tutup total koneksi native yang ada
+     * & buka + claim ulang dari fd BARU -- meniru persis pola yang sudah
+     * terbukti di [switchToNativeFallback] (fd lama yang pernah macet tidak
+     * bisa dipercaya lagi walau clear_halt sukses di sisi kontrol). Dipanggil
+     * HANYA setelah clear_halt reaktif+retry di write()/read()/readInto()
+     * masih tetap gagal total -- dari observasi, itu tandanya bukan lagi
+     * soal endpoint halted biasa.
+     */
+    private fun reopenNativeConnection(): Boolean {
+        Log.w(TAG, "clear_halt tidak cukup, tutup total koneksi & buka ulang dari fd baru.")
+        if (nativeInterfaceClaimed) {
+            ptpInterface?.let { usbConnection?.releaseInterface(it) }
+            nativeInterfaceClaimed = false
+        }
+        usbConnection?.close()
+        usbConnection = null
+
+        val freshConnection = usbManager.openDevice(device)
+        if (freshConnection == null) {
+            Log.e(TAG, "Reopen GAGAL: tidak bisa buka UsbDeviceConnection baru.")
+            return false
+        }
+        usbConnection = freshConnection
+
+        val intf = ptpInterface ?: return false
+        val claimed = freshConnection.claimInterface(intf, true)
+        if (!claimed) {
+            Log.e(TAG, "Reopen GAGAL: claimInterface juga gagal.")
+            return false
+        }
+        nativeInterfaceClaimed = true
+        Log.i(TAG, "Reopen koneksi native berhasil, coba transfer sekali lagi.")
+        return true
+    }
+
     fun write(data: ByteArray): Int {
+        if (connectionDead) return -1
+
         if (!usingNativeFallback) {
             val result = NativePtpBridge.bulkWrite(data)
             if (result >= 0) return result
@@ -302,10 +348,42 @@ class PtpNativeConnection(
         // Timeout 10000ms (bukan 5000ms) -- meniru qDslrDashboard (referensi
         // implementasi PTP-over-USB Android yang terbukti stabil di device
         // serupa), yang konsisten memakai 10 detik untuk bulkTransfer biasa.
-        return connection.bulkTransfer(ep, data, data.size, 10000)
+        val result = connection.bulkTransfer(ep, data, data.size, 10000)
+        if (result >= 0) return result
+
+        // Gagal PENUH (bukan gagal instan) di jalur native fallback -- dari
+        // observasi live view freeze, ini muncul TEPAT setelah satu transaksi
+        // yang responsnya datang langsung sebagai RESPONSE container (tanpa
+        // fase DATA), mis. GetViewFinderData saat kamera belum punya frame
+        // baru. Endpoint OUT wedge: device menolak command baru sampai host
+        // mengirim CLEAR_FEATURE(ENDPOINT_HALT). SEKALI retry reaktif di sini
+        // (bukan otomatis di setiap open, lihat clearHaltNative()) sebelum
+        // benar-benar menyerah -- tanpa ini, endpoint tetap wedge permanen
+        // untuk sisa sesi begitu sekali kena.
+        Log.w(TAG, "write native gagal total (r=$result, timeout penuh), coba clear_halt reaktif + retry sekali.")
+        clearHaltNative(ep)
+        val retryResult = connection.bulkTransfer(ep, data, data.size, 10000)
+        if (retryResult >= 0) return retryResult
+
+        // clear_halt tidak membantu -- eskalasi ke reopen koneksi total.
+        Log.w(TAG, "write masih gagal setelah clear_halt (r=$retryResult), eskalasi ke reopen koneksi.")
+        if (!reopenNativeConnection()) {
+            connectionDead = true
+            return retryResult
+        }
+        val freshConnection = usbConnection ?: return -1
+        val freshEp = epOut ?: return -1
+        val finalResult = freshConnection.bulkTransfer(freshEp, data, data.size, 10000)
+        if (finalResult < 0) {
+            Log.e(TAG, "write GAGAL TOTAL walau sudah reopen koneksi (r=$finalResult) -- koneksi dianggap mati.")
+            connectionDead = true
+        }
+        return finalResult
     }
 
     fun read(buffer: ByteArray, timeoutMs: Int = 10000): Int {
+        if (connectionDead) return -1
+
         if (!usingNativeFallback) {
             val result = NativePtpBridge.bulkRead(buffer, buffer.size)
             if (result >= 0) return result
@@ -316,7 +394,30 @@ class PtpNativeConnection(
 
         val connection = usbConnection ?: return -1
         val ep = epIn ?: return -1
-        return connection.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
+        val result = connection.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
+        if (result >= 0) return result
+
+        // Sama seperti di write(): gagal penuh (timeout habis) di jalur native
+        // fallback menandakan endpoint IN wedge, bukan sekadar transient.
+        // Retry reaktif sekali dengan clear_halt.
+        Log.w(TAG, "read native gagal total (r=$result, timeout penuh), coba clear_halt reaktif + retry sekali.")
+        clearHaltNative(ep)
+        val retryResult = connection.bulkTransfer(ep, buffer, buffer.size, timeoutMs)
+        if (retryResult >= 0) return retryResult
+
+        Log.w(TAG, "read masih gagal setelah clear_halt (r=$retryResult), eskalasi ke reopen koneksi.")
+        if (!reopenNativeConnection()) {
+            connectionDead = true
+            return retryResult
+        }
+        val freshConnection = usbConnection ?: return -1
+        val freshEp = epIn ?: return -1
+        val finalResult = freshConnection.bulkTransfer(freshEp, buffer, buffer.size, timeoutMs)
+        if (finalResult < 0) {
+            Log.e(TAG, "read GAGAL TOTAL walau sudah reopen koneksi (r=$finalResult) -- koneksi dianggap mati.")
+            connectionDead = true
+        }
+        return finalResult
     }
 
     /**
@@ -333,6 +434,8 @@ class PtpNativeConnection(
      * bertahap ini (yang rewel) semuanya sudah lewat native fallback murni.
      */
     fun readInto(buffer: ByteArray, offset: Int, length: Int, timeoutMs: Int = 10000): Int {
+        if (connectionDead) return -1
+
         if (!usingNativeFallback) {
             val temp = ByteArray(length)
             val result = NativePtpBridge.bulkRead(temp, length)
@@ -346,8 +449,37 @@ class PtpNativeConnection(
 
         val connection = usbConnection ?: return -1
         val ep = epIn ?: return -1
-        return connection.bulkTransfer(ep, buffer, offset, length, timeoutMs)
+        val result = connection.bulkTransfer(ep, buffer, offset, length, timeoutMs)
+        if (result >= 0) return result
+
+        Log.w(TAG, "readInto native gagal total (r=$result, timeout penuh), coba clear_halt reaktif + retry sekali.")
+        clearHaltNative(ep)
+        val retryResult = connection.bulkTransfer(ep, buffer, offset, length, timeoutMs)
+        if (retryResult >= 0) return retryResult
+
+        Log.w(TAG, "readInto masih gagal setelah clear_halt (r=$retryResult), eskalasi ke reopen koneksi.")
+        if (!reopenNativeConnection()) {
+            connectionDead = true
+            return retryResult
+        }
+        val freshConnection = usbConnection ?: return -1
+        val freshEp = epIn ?: return -1
+        val finalResult = freshConnection.bulkTransfer(freshEp, buffer, offset, length, timeoutMs)
+        if (finalResult < 0) {
+            Log.e(TAG, "readInto GAGAL TOTAL walau sudah reopen koneksi (r=$finalResult) -- koneksi dianggap mati.")
+            connectionDead = true
+        }
+        return finalResult
     }
+
+    /**
+     * True kalau clear_halt reaktif MAUPUN reopen koneksi total sudah dicoba
+     * dan tetap gagal -- device dianggap benar-benar putus/mati, bukan lagi
+     * sekadar wedge sementara. Setelah ini, write()/read()/readInto() akan
+     * langsung gagal cepat tanpa transfer USB apapun. Dipakai [PtpSessionManager]
+     * untuk berhenti mencoba diam-diam dan memanggil onSessionError ke UI.
+     */
+    fun isConnectionDead(): Boolean = connectionDead
 
     fun readInterrupt(buffer: ByteArray, timeoutMs: Int = 100): Int {
         // Untuk sekarang belum diimplementasikan di kedua jalur (libusb & native),

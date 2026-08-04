@@ -254,6 +254,19 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
                 try {
                     loopCount++
 
+                    if (usbConnection.isConnectionDead()) {
+                        // clear_halt reaktif MAUPUN reopen koneksi total di
+                        // PtpNativeConnection sudah dicoba dan tetap gagal --
+                        // jangan diam-diam terus loop selamanya (itu yang
+                        // sebelumnya kelihatan sebagai "freeze" tanpa ujung).
+                        // Kabari UI supaya bisa minta user cabut/pasang ulang
+                        // kamera, lalu hentikan loop ini.
+                        Log.e(TAG, "Koneksi USB mati total, menghentikan polling loop.")
+                        sessionOpen = false
+                        onSessionError?.invoke("Koneksi kamera terputus, silakan sambungkan ulang.")
+                        break
+                    }
+
                     if (liveViewRequested && !liveViewSetupDone) {
                         val captureDestOk = setCanonDeviceProperty(PtpPropCode.CANON_CAPTURE_DESTINATION, 2)
                         Log.d(TAG, "SetCaptureDestination(SD) hasil: $captureDestOk")
