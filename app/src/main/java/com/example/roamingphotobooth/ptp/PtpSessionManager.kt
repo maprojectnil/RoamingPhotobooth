@@ -290,7 +290,16 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
                     // shutter "nggak jepret" sebelumnya.
                     if (captureRequested) {
                         captureRequested = false
-                        performCapturePress()
+                        val captureOk = performCapturePress()
+                        if (!captureOk) {
+                            // Shutter command gagal (write gagal / Device Busy / dll) —
+                            // tidak akan pernah ada foto baru yang muncul lewat pollNewObjects(),
+                            // jadi caller (MainActivity) HARUS diberi tahu di sini supaya bisa
+                            // reset state UI-nya (standIsCapturing dkk), bukan nyangkut nunggu
+                            // foto yang tidak akan pernah datang.
+                            Log.w(TAG, "performCapturePress() gagal total, memanggil onCaptureFailed")
+                            onCaptureFailed?.invoke()
+                        }
                     }
 
                     // Cek foto baru: cuma tiap OBJECT_CHECK_INTERVAL_MS, TIDAK setiap iterasi
@@ -399,6 +408,15 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
     }
 
     /**
+     * Dipanggil dari polling loop kalau performCapturePress() gagal total (shutter
+     * tidak ke-trigger di kamera). Caller (MainActivity) HARUS pasang listener ini
+     * kalau pakai capturePhoto() dari tombol software (mode Stand), supaya bisa
+     * reset state "sedang capture" di UI — kalau tidak, UI bakal nyangkut nunggu
+     * foto yang tidak akan pernah muncul.
+     */
+    var onCaptureFailed: (() -> Unit)? = null
+
+    /**
      * Eksekusi beneran command capture. Dipanggil dari dalam loop polling
      * (startPollingLoop), JANGAN dipanggil langsung dari luar supaya urutan
      * command USB tetap serial.
@@ -426,7 +444,7 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
      * kemungkinan besar drive mode fisik di kamera emang lagi di-set ke
      * Continuous/Burst — coba ganti manual ke Single Shot di kamera.
      */
-    private suspend fun performCapturePress() {
+    private suspend fun performCapturePress(): Boolean {
         Log.i(TAG, "performCapturePress(): mengirim full-press shutter release")
         val pressOk = sendCommandAndWait(PtpOpCode.CANON_EOS_REMOTE_RELEASE_ON, intArrayOf(3, 0))
         Log.i(TAG, "performCapturePress(): RemoteReleaseOn(3,0) hasil = $pressOk")
@@ -437,6 +455,11 @@ class PtpSessionManager(private val usbConnection: PtpNativeConnection) {
         if (!pressOk) {
             Log.w(TAG, "performCapturePress(): RemoteReleaseOn GAGAL (response bukan OK) — kemungkinan Device Busy, cek Logcat detail di atas")
         }
+
+        // pressOk adalah yang menentukan apakah shutter beneran ke-trigger di kamera.
+        // releaseOk gagal sendirian (tombol sudah kepencet lalu OFF-nya gagal) tetap
+        // dianggap capture "jalan" — foto akan tetap terekam, jadi tidak dianggap gagal total.
+        return pressOk
     }
 
     private fun pollViewFinderData() {

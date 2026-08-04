@@ -112,6 +112,10 @@ class MainActivity : ComponentActivity() {
     // (yang merupakan behavior default untuk mode Mobile / capture via tombol fisik).
     private var pendingStandCaptureCallback: ((ByteArray) -> Unit)? = null
 
+    // Dipakai standStartCountdownAndCapture() buat validasi timeout jaring pengaman —
+    // lihat komentar di fungsi itu.
+    private var standCaptureRequestId = 0L
+
     // True selagi standAcceptPhoto() lagi menggabungkan frame+foto & menyimpan JPEG
     // ke disk di background thread. Dipakai buat cegah double-tap tombol "Lanjut"
     // selama proses itu berjalan (lihat standAcceptPhoto()).
@@ -385,6 +389,13 @@ class MainActivity : ComponentActivity() {
             standCountdownValue.value = null
             standIsCapturing.value = true
 
+            // requestId ini buat bedain "timeout basi dari attempt lama" vs "timeout
+            // yang beneran relevan buat attempt sekarang" -- kalau di antara delay 6
+            // detik di bawah user sempat retake/shutter ulang (attempt baru bikin
+            // requestId baru), timeout attempt lama tidak boleh ikut nge-reset state
+            // attempt yang baru itu.
+            val requestId = ++standCaptureRequestId
+
             pendingStandCaptureCallback = { photoBytes ->
                 standReviewPhotoBytes = photoBytes
                 runOnUiThread {
@@ -403,6 +414,20 @@ class MainActivity : ComponentActivity() {
                     standIsCapturing.value = false
                     pendingStandCaptureCallback = null
                 }
+
+            // Jaring pengaman kedua: kalau performCapturePress() di PtpSessionManager
+            // SUKSES (jadi onCaptureFailed tidak kepanggil) tapi foto tetap tidak
+            // pernah nongol lewat pollNewObjects() (mis. kamera nyimpen ke lokasi
+            // beda, event GetEvent kelewat, dll), standIsCapturing bakal nyangkut
+            // true selamanya tanpa ini. 6 detik dipilih jauh di atas waktu normal
+            // (shutter + write ke SD + deteksi object baru biasanya <2 detik).
+            delay(6000)
+            if (standCaptureRequestId == requestId && standIsCapturing.value) {
+                Log.w("MainActivity", "standStartCountdownAndCapture: timeout, foto tidak pernah masuk")
+                standIsCapturing.value = false
+                pendingStandCaptureCallback = null
+                statusText.value = "⚠️ Foto tidak terdeteksi, coba lagi"
+            }
         }
     }
 
@@ -434,11 +459,16 @@ class MainActivity : ComponentActivity() {
         standIsProcessing.value = true
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val added = session.addPhoto(photoBytes) // decode bitmap res-penuh, berat -> background
+            val addResult = session.addPhoto(photoBytes) // decode bitmap res-penuh, berat -> background
 
-            if (!added) {
+            if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
+                val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
+                    "⚠️ Foto gagal diproses (korup) — jepret ulang untuk slot ini"
+                } else {
+                    "⚠️ Semua slot sudah terisi"
+                }
                 withContext(Dispatchers.Main) {
-                    statusText.value = "⚠️ Semua slot sudah terisi"
+                    statusText.value = msg
                     standIsProcessing.value = false
                 }
                 return@launch
@@ -623,6 +653,18 @@ class MainActivity : ComponentActivity() {
                 sessionManager = null
             }
 
+            // Shutter software (tombol di layar Stand) gagal ke-trigger di kamera —
+            // tidak akan pernah ada foto baru yang datang lewat onNewPhotoCaptured,
+            // jadi reset di sini supaya tombol shutter tidak nyangkut disabled dan
+            // user tinggal tap ulang, bukan cabut-pasang kabel kamera.
+            session.onCaptureFailed = {
+                runOnUiThread {
+                    standIsCapturing.value = false
+                    pendingStandCaptureCallback = null
+                    statusText.value = "⚠️ Gagal jepret, coba lagi"
+                }
+            }
+
             session.onNewPhotoCaptured = merge@{ photoBytes ->
                 // MOBILE + lagi nampilin layar hasil akhir (sesi sebelumnya sudah kelar,
                 // nunggu user "Lanjut"): jepretan baru dari kamera fisik di-anggap SINYAL
@@ -661,9 +703,14 @@ class MainActivity : ComponentActivity() {
                     return@merge
                 }
 
-                val added = templateSess.addPhoto(photoBytes)
-                if (!added) {
-                    runOnUiThread { statusText.value = "⚠️ Semua slot sudah terisi" }
+                val addResult = templateSess.addPhoto(photoBytes)
+                if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
+                    val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
+                        "⚠️ Foto gagal diproses (korup) — jepret ulang untuk slot ini"
+                    } else {
+                        "⚠️ Semua slot sudah terisi"
+                    }
+                    runOnUiThread { statusText.value = msg }
                     return@merge
                 }
 

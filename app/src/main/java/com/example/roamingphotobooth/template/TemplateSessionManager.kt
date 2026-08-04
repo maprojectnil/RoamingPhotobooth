@@ -18,6 +18,15 @@ private const val TAG = "TemplateSession"
  */
 class TemplateSessionManager(private val template: PhotoTemplate) {
 
+    /**
+     * Hasil addPhoto() — dipecah jadi 3 kondisi supaya caller bisa kasih pesan yang
+     * BENAR ke user. Sebelumnya cuma Boolean, jadi "semua slot penuh" (normal) dan
+     * "foto korup gagal di-decode" (biasanya gara-gara glitch transfer USB) sama-sama
+     * ditampilkan sebagai "Semua slot sudah terisi" — user tidak pernah tahu foto
+     * itu sebenarnya dibuang diam-diam dan slot-nya masih kosong, jadi tidak retake.
+     */
+    enum class AddPhotoResult { ADDED, ALL_SLOTS_FULL, DECODE_FAILED }
+
     private val capturedPhotos = mutableMapOf<Int, Bitmap>() // key: slot order (1, 2, 3, ...)
 
     val totalSlots: Int get() = template.slots.map { it.order }.distinct().size
@@ -40,16 +49,21 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
      * Panggil ini setiap kali foto baru berhasil di-capture.
      * Otomatis masuk ke slot berikutnya yang masih kosong.
      */
-    fun addPhoto(photoBytes: ByteArray): Boolean {
+    fun addPhoto(photoBytes: ByteArray): AddPhotoResult {
         val slotOrder = nextSlotOrder() ?: run {
             Log.w(TAG, "addPhoto dipanggil tapi semua slot sudah penuh")
-            return false
+            return AddPhotoResult.ALL_SLOTS_FULL
         }
 
         val decoded = BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
         if (decoded == null) {
-            Log.e(TAG, "Gagal decode foto jadi Bitmap")
-            return false
+            // Biasanya gara-gara data foto korup akibat glitch transfer USB (lihat
+            // "write gagal" di PtpSessionManager) -- slot ini TETAP kosong (tidak
+            // ke-assign ke capturedPhotos), jadi nextSlotOrder() bakal balik ke slot
+            // yang sama lagi di jepretan berikutnya. Caller WAJIB kasih tahu user
+            // buat retake, bukan nampilin pesan "semua slot sudah terisi".
+            Log.e(TAG, "Gagal decode foto jadi Bitmap (slot $slotOrder tetap kosong)")
+            return AddPhotoResult.DECODE_FAILED
         }
 
         // Mirror horizontal (efek cermin) di sini, di titik paling awal — supaya
@@ -60,7 +74,7 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
 
         capturedPhotos[slotOrder] = bitmap
         Log.i(TAG, "Foto masuk ke slot $slotOrder. Progress: $filledSlots/$totalSlots")
-        return true
+        return AddPhotoResult.ADDED
     }
 
     fun reset() {
