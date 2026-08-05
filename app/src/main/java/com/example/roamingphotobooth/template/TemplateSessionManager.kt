@@ -58,7 +58,7 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
         val decoded = BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
         if (decoded == null) {
             // Biasanya gara-gara data foto korup akibat glitch transfer USB (lihat
-            // "write gagal" di PtpSessionManager) -- slot ini TETAP kosong (tidak
+            // EsCameraSession.encodeCaptureToJpeg) -- slot ini TETAP kosong (tidak
             // ke-assign ke capturedPhotos), jadi nextSlotOrder() bakal balik ke slot
             // yang sama lagi di jepretan berikutnya. Caller WAJIB kasih tahu user
             // buat retake, bukan nampilin pesan "semua slot sudah terisi".

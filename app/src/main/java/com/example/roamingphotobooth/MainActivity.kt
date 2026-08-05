@@ -8,8 +8,6 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
@@ -29,13 +27,8 @@ import com.example.roamingphotobooth.booth.mobile.MobileBoothScreen
 import com.example.roamingphotobooth.booth.stand.StandBoothScreen
 import com.example.roamingphotobooth.nav.AppScreen
 import com.example.roamingphotobooth.nav.BoothMode
-import com.example.roamingphotobooth.ptp.NativePtpBridge
-import com.example.roamingphotobooth.ptp.PtpDeviceManager
-import com.example.roamingphotobooth.ptp.PtpSessionManager
-import com.example.roamingphotobooth.ptp.NativeUsbBulkTest
+import com.example.roamingphotobooth.ptp.EsCameraSession
 import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
-import com.example.roamingphotobooth.ptp.PtpNativeConnection
-import com.example.roamingphotobooth.ptp.UsbQuirksStorage
 import com.example.roamingphotobooth.ptp.BitmapMerger
 import com.example.roamingphotobooth.ui.HomeScreen
 import com.example.roamingphotobooth.ui.ModeSelectScreen
@@ -45,17 +38,10 @@ import com.example.roamingphotobooth.settings.SettingsActivity
 
 class MainActivity : ComponentActivity() {
 
-    // DEBUG ONLY: set true untuk isolasi masalah bulk transfer (lihat NativeUsbBulkTest.kt).
-    // Saat true, alur PTP normal (libusb) TIDAK jalan -- cuma test native yang jalan.
-    // Sudah tidak perlu lagi sejak PtpNativeConnection punya fallback otomatis
-    // ke native saat libusb gagal -- biarkan false.
-    private val RUN_NATIVE_BULK_TEST_ONLY = false
-
-    private lateinit var deviceManager: PtpDeviceManager
-    private var sessionManager: PtpSessionManager? = null
-
-    // GUARD: cegah multiple sesi berjalan bersamaan ke device yang sama
-    private var isConnecting = false
+    // Komunikasi PTP ke kamera (Canon EOS / Nikon) lewat library es-ptp-camera —
+    // lihat EsCameraSession untuk detail adapter & alasan migrasi dari
+    // implementasi native/libusb sebelumnya.
+    private lateinit var cameraSession: EsCameraSession
 
     private var frameOverlayBitmap = mutableStateOf<Bitmap?>(null)
 
@@ -187,7 +173,8 @@ class MainActivity : ComponentActivity() {
         frameOverlayBitmap.value = loadFrameFromAssets("wedding.png")
         previewBitmap.value = frameOverlayBitmap.value
 
-        deviceManager = PtpDeviceManager(this)
+        cameraSession = EsCameraSession(this)
+        wireCameraSessionCallbacks()
         templateStorage = com.example.roamingphotobooth.template.TemplateStorage(this)
         frameFileManager = com.example.roamingphotobooth.template.FrameFileManager(this)
         appearanceStorage = AppearanceStorage(this)
@@ -269,33 +256,138 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        deviceManager.startListening(
-            onReady = { device ->
-                if (RUN_NATIVE_BULK_TEST_ONLY) {
-                    // DEBUG: isolasi apakah bulk transfer native Android (tanpa libusb)
-                    // bisa jalan di device ini. Jangan panggil onCameraDeviceReady()
-                    // di sini supaya tidak ada 2 pihak (test ini + libusb) berebut
-                    // claim interface yang sama secara bersamaan. Lihat logcat
-                    // dengan tag NativeBulkTest untuk hasilnya.
-                    NativeUsbBulkTest.run(this, device)
-                } else {
-                    onCameraDeviceReady(device)
-                }
-            },
-            onDetached = {
-                runOnUiThread { statusText.value = "Kamera terputus. Menunggu kamera dicolok..." }
-                sessionManager?.closeSession()
-                sessionManager = null
-                isConnecting = false
-            }
-        )
+        // Coba connect ke kamera yang mungkin sudah tersambung SEBELUM app dibuka,
+        // atau (kalau intent ini datang dari filter USB_DEVICE_ATTACHED) langsung
+        // pakai device di dalamnya. EsCameraSession.initialize() aman dipanggil
+        // berkali-kali -- lihat catatan di PtpService.initialize() (library).
+        cameraSession.initialize(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Sengaja dikosongkan - startListening() sudah cukup di onCreate,
-        // tidak perlu dipanggil ulang di sini (mencegah race condition / sesi ganda)
+        // BEDA dari versi lama: sekarang WAJIB diteruskan ke cameraSession, karena
+        // inilah jalur yang dipakai saat kamera dicolok SAAT app sudah berjalan
+        // (activity singleTop menerima ulang lewat sini, bukan onCreate lagi) --
+        // intent-nya membawa EXTRA_DEVICE dari filter USB_DEVICE_ATTACHED di manifest.
+        cameraSession.initialize(intent)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraSession.release()
+    }
+
+    /**
+     * Pasang semua callback EsCameraSession sekali di awal (bukan per-koneksi
+     * seperti onCameraDeviceReady() versi lama) -- library mengurus sendiri
+     * siklus reconnect/permission tiap kali kamera dicolok ulang.
+     */
+    private fun wireCameraSessionCallbacks() {
+        cameraSession.onSessionReady = {
+            runOnUiThread {
+                statusText.value = "✅ Sesi PTP terbuka!\nMemulai live view..."
+            }
+        }
+
+        cameraSession.onLiveViewFrame = { bitmap ->
+            liveViewBitmap.value = bitmap
+        }
+
+        cameraSession.onSessionError = { error ->
+            runOnUiThread {
+                statusText.value = "❌ Error: $error"
+            }
+        }
+
+        // Shutter software (tombol di layar Stand) gagal ke-trigger di kamera —
+        // tidak akan pernah ada foto baru yang datang lewat onNewPhotoCaptured,
+        // jadi reset di sini supaya tombol shutter tidak nyangkut disabled dan
+        // user tinggal tap ulang, bukan cabut-pasang kabel kamera.
+        cameraSession.onCaptureFailed = {
+            runOnUiThread {
+                standIsCapturing.value = false
+                pendingStandCaptureCallback = null
+                statusText.value = "⚠️ Gagal jepret, coba lagi"
+            }
+        }
+
+        cameraSession.onDeviceDetached = {
+            runOnUiThread { statusText.value = "Kamera terputus. Menunggu kamera dicolok..." }
+        }
+
+        cameraSession.onNewPhotoCaptured = merge@{ photoBytes ->
+            // MOBILE + lagi nampilin layar hasil akhir (sesi sebelumnya sudah kelar,
+            // nunggu user "Lanjut"): jepretan baru dari kamera fisik di-anggap SINYAL
+            // "mulai sesi baru" doang, bukan foto pertama sesi berikutnya — jadi foto
+            // hasil jepretan ini DIBUANG (cuma dipakai buat trigger, tidak disimpan/
+            // di-upload) dan langsung reset sesi + balik ke live view.
+            if (boothMode.value == BoothMode.MOBILE && finalResultBitmap.value != null) {
+                runOnUiThread {
+                    statusText.value = "📸 Terdeteksi jepretan baru → mulai sesi baru..."
+                    startNewSession()
+                }
+                return@merge
+            }
+
+            // Kalau lagi nunggu 1 foto buat layar review Stand (abis shutter software
+            // ditembak), arahkan ke situ dan JANGAN auto-commit ke slot template dulu.
+            val standCallback = pendingStandCaptureCallback
+            if (standCallback != null) {
+                pendingStandCaptureCallback = null
+                standCallback.invoke(photoBytes)
+                return@merge
+            }
+
+            val templateSess = templateSession
+
+            if (templateSess == null) {
+                // Tidak ada template aktif — fallback ke behavior lama (1 foto, frame test)
+                runOnUiThread { statusText.value = "📸 Foto diterima! (tanpa template aktif)" }
+                val decodedPhoto = BitmapMerger.decodeBitmap(photoBytes) ?: return@merge
+                val cameraPhoto = BitmapMerger.mirrorHorizontal(decodedPhoto)
+                decodedPhoto.recycle()
+                val testFrame = createTestFrame(cameraPhoto.width, cameraPhoto.height)
+                val merged = BitmapMerger.mergeBitmap(cameraPhoto, testFrame)
+                val savedUri = saveMergedBitmap(merged)
+                runOnUiThread { statusText.value = "✅ Tersimpan: $savedUri" }
+                return@merge
+            }
+
+            val addResult = templateSess.addPhoto(photoBytes)
+            if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
+                val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
+                    "⚠️ Foto gagal diproses (korup) — jepret ulang untuk slot ini"
+                } else {
+                    "⚠️ Semua slot sudah terisi"
+                }
+                runOnUiThread { statusText.value = msg }
+                return@merge
+            }
+
+            runOnUiThread {
+                statusText.value = "📸 Foto ${templateSess.filledSlots}/${templateSess.totalSlots} diterima!"
+                refreshPreview()
+            }
+
+            if (templateSess.isComplete) {
+                val frameBmp = frameOverlayBitmap.value
+                if (frameBmp != null) {
+                    val finalImage = templateSess.buildFinalImage(frameBmp)
+                    if (finalImage != null) {
+                        val savedUri = saveMergedBitmap(finalImage)
+                        runOnUiThread {
+                            statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedUri"
+                            // QR sudah di-set instan di dalam saveMergedBitmap() di atas -- JANGAN
+                            // di-null-kan lagi di sini, nanti nimpa QR yang baru saja muncul.
+                            finalResultBitmap.value = finalImage
+                        }
+                        // Sesi TIDAK di-reset di sini — nunggu user tekan tombol "Lanjut"
+                        // di layar hasil supaya foto akhir bisa direview dulu.
+                    }
+                }
+            }
+        }
     }
 
     private fun loadActiveTemplate(templateId: String, showEmptySlotPlaceholders: Boolean) {
@@ -373,7 +465,7 @@ class MainActivity : ComponentActivity() {
 
     /**
      * Dipanggil dari tombol shutter di layar (mode Stand): jalanin countdown
-     * 3-2-1 di UI, lalu kirim command capture ke kamera lewat PtpSessionManager,
+     * 3-2-1 di UI, lalu kirim command capture ke kamera lewat EsCameraSession,
      * dan nunggu foto masuk lewat pendingStandCaptureCallback (di-invoke dari
      * session.onNewPhotoCaptured, lihat onCameraDeviceReady) sebelum ditampilkan
      * di layar review.
@@ -408,14 +500,15 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            sessionManager?.capturePhoto()
-                ?: runOnUiThread {
+            if (!cameraSession.capturePhoto()) {
+                runOnUiThread {
                     statusText.value = "⚠️ Kamera belum terkoneksi"
                     standIsCapturing.value = false
                     pendingStandCaptureCallback = null
                 }
+            }
 
-            // Jaring pengaman kedua: kalau performCapturePress() di PtpSessionManager
+            // Jaring pengaman kedua: kalau capture() di EsCameraSession/library
             // SUKSES (jadi onCaptureFailed tidak kepanggil) tapi foto tetap tidak
             // pernah nongol lewat pollNewObjects() (mis. kamera nyimpen ke lokasi
             // beda, event GetEvent kelewat, dll), standIsCapturing bakal nyangkut
@@ -596,149 +689,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun onCameraDeviceReady(device: UsbDevice) {
-        if (isConnecting || sessionManager != null) {
-            Log.w("MainActivity", "onCameraDeviceReady dipanggil lagi, DIABAIKAN")
-            return
-        }
-        isConnecting = true
-
-        statusText.value = "Kamera terdeteksi: ${device.deviceName}\nMembuka koneksi (libusb)..."
-
-        val usbManager = getSystemService(USB_SERVICE) as UsbManager
-        val usbConnection = PtpNativeConnection(usbManager, device, UsbQuirksStorage(this))
-
-        // PENTING: open() (claimInterface) dan seluruh siklus PtpSessionManager
-        // (semua write()/read() berikutnya) HARUS jalan di thread OS yang sama
-        // persis -- lihat catatan lengkap di PtpNativeConnection.usbDispatcher.
-        // Sebelumnya open() dipanggil langsung di main thread lalu PtpSessionManager
-        // memakai Dispatchers.IO (thread pool elastis, BEDA thread tiap kali) untuk
-        // transfer-nya -- dari observasi berulang, transfer pertama setelah
-        // perpindahan thread itu SELALU gagal instan. Sekarang keduanya memakai
-        // satu thread khusus yang sama (usbDispatcher).
-        lifecycleScope.launch(PtpNativeConnection.usbDispatcher) {
-            val opened = usbConnection.open()
-            if (!opened) {
-                withContext(Dispatchers.Main) {
-                    statusText.value = "Gagal membuka koneksi libusb ke kamera"
-                    isConnecting = false
-                }
-                return@launch
-            }
-
-            val session = PtpSessionManager(usbConnection)
-            sessionManager = session
-
-            session.onSessionReady = {
-                runOnUiThread {
-                    statusText.value = "✅ Sesi PTP terbuka!\nMemulai live view..."
-                }
-                isConnecting = false
-                session.startLiveView()
-            }
-
-            session.onLiveViewFrame = { frameBytes ->
-                val bitmap = BitmapMerger.decodeLiveViewFrame(frameBytes)
-                if (bitmap != null) {
-                    liveViewBitmap.value = bitmap
-                }
-            }
-
-            session.onSessionError = { error ->
-                runOnUiThread {
-                    statusText.value = "❌ Error: $error"
-                }
-                isConnecting = false
-                sessionManager?.closeSession()
-                sessionManager = null
-            }
-
-            // Shutter software (tombol di layar Stand) gagal ke-trigger di kamera —
-            // tidak akan pernah ada foto baru yang datang lewat onNewPhotoCaptured,
-            // jadi reset di sini supaya tombol shutter tidak nyangkut disabled dan
-            // user tinggal tap ulang, bukan cabut-pasang kabel kamera.
-            session.onCaptureFailed = {
-                runOnUiThread {
-                    standIsCapturing.value = false
-                    pendingStandCaptureCallback = null
-                    statusText.value = "⚠️ Gagal jepret, coba lagi"
-                }
-            }
-
-            session.onNewPhotoCaptured = merge@{ photoBytes ->
-                // MOBILE + lagi nampilin layar hasil akhir (sesi sebelumnya sudah kelar,
-                // nunggu user "Lanjut"): jepretan baru dari kamera fisik di-anggap SINYAL
-                // "mulai sesi baru" doang, bukan foto pertama sesi berikutnya — jadi foto
-                // hasil jepretan ini DIBUANG (cuma dipakai buat trigger, tidak disimpan/
-                // di-upload) dan langsung reset sesi + balik ke live view.
-                if (boothMode.value == BoothMode.MOBILE && finalResultBitmap.value != null) {
-                    runOnUiThread {
-                        statusText.value = "📸 Terdeteksi jepretan baru → mulai sesi baru..."
-                        startNewSession()
-                    }
-                    return@merge
-                }
-
-                // Kalau lagi nunggu 1 foto buat layar review Stand (abis shutter software
-                // ditembak), arahkan ke situ dan JANGAN auto-commit ke slot template dulu.
-                val standCallback = pendingStandCaptureCallback
-                if (standCallback != null) {
-                    pendingStandCaptureCallback = null
-                    standCallback.invoke(photoBytes)
-                    return@merge
-                }
-
-                val templateSess = templateSession
-
-                if (templateSess == null) {
-                    // Tidak ada template aktif — fallback ke behavior lama (1 foto, frame test)
-                    runOnUiThread { statusText.value = "📸 Foto diterima! (tanpa template aktif)" }
-                    val decodedPhoto = BitmapMerger.decodeBitmap(photoBytes) ?: return@merge
-                    val cameraPhoto = BitmapMerger.mirrorHorizontal(decodedPhoto)
-                    decodedPhoto.recycle()
-                    val testFrame = createTestFrame(cameraPhoto.width, cameraPhoto.height)
-                    val merged = BitmapMerger.mergeBitmap(cameraPhoto, testFrame)
-                    val savedUri = saveMergedBitmap(merged)
-                    runOnUiThread { statusText.value = "✅ Tersimpan: $savedUri" }
-                    return@merge
-                }
-
-                val addResult = templateSess.addPhoto(photoBytes)
-                if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
-                    val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
-                        "⚠️ Foto gagal diproses (korup) — jepret ulang untuk slot ini"
-                    } else {
-                        "⚠️ Semua slot sudah terisi"
-                    }
-                    runOnUiThread { statusText.value = msg }
-                    return@merge
-                }
-
-                runOnUiThread {
-                    statusText.value = "📸 Foto ${templateSess.filledSlots}/${templateSess.totalSlots} diterima!"
-                    refreshPreview()
-                }
-
-                if (templateSess.isComplete) {
-                    val frameBmp = frameOverlayBitmap.value
-                    if (frameBmp != null) {
-                        val finalImage = templateSess.buildFinalImage(frameBmp)
-                        if (finalImage != null) {
-                            val savedUri = saveMergedBitmap(finalImage)
-                            runOnUiThread {
-                                statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedUri"
-                                // QR sudah di-set instan di dalam saveMergedBitmap() di atas -- JANGAN
-                                // di-null-kan lagi di sini, nanti nimpa QR yang baru saja muncul.
-                                finalResultBitmap.value = finalImage
-                            }
-                            // Sesi TIDAK di-reset di sini — nunggu user tekan tombol "Lanjut"
-                            // di layar hasil supaya foto akhir bisa direview dulu.
-                        }
-                    }
-                }
-            }
-
-            session.startSession()
-        }
-    }
 }

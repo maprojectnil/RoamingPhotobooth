@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Canon EOS (0x04A9) -->
     <usb-device vendor-id="1193" />
+    <!-- Nikon (0x04B0) — didukung oleh library es-ptp-camera -->
+    <usb-device vendor-id="1200" />
 </resources>

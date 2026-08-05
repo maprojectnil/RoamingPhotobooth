@@ -54,32 +54,15 @@ object BitmapMerger {
     }
 
     /**
-     * Helper: decode ByteArray (dari hasil download PTP) jadi Bitmap
+     * Helper: decode ByteArray (dari hasil download PTP, atau hasil re-encode JPEG
+     * di EsCameraSession) jadi Bitmap.
+     *
+     * Catatan: frame live view TIDAK lagi lewat sini sejak migrasi ke library
+     * es-ptp-camera — library-nya sudah memberikan Bitmap langsung yang sudah
+     * di-decode (lihat EsCameraSession.onLiveViewData / LiveViewData.bitmap),
+     * jadi tidak ada lagi ByteArray mentah untuk di-decode di jalur live view.
      */
     fun decodeBitmap(bytes: ByteArray): Bitmap? {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-    }
-
-    // Dipakai khusus buat decodeLiveViewFrame() di bawah. RGB_565 = 2 byte/pixel
-    // (vs ARGB_8888 default = 4 byte/pixel) — live view kamera nggak butuh alpha
-    // channel, jadi ini aman. Instance-nya dipakai ulang (bukan bikin Options baru
-    // tiap panggilan) supaya tidak nambah alokasi kecil-kecil di jalur yang sudah
-    // dipanggil ~20x/detik.
-    private val liveViewDecodeOptions = BitmapFactory.Options().apply {
-        inPreferredConfig = Bitmap.Config.RGB_565
-    }
-
-    /**
-     * Decode frame JPEG live view. TERPISAH dari [decodeBitmap] biasa karena live view
-     * di-decode ~20x/detik (tiap 50ms, lihat PtpSessionManager.pollViewFinderData) —
-     * kalau pakai ARGB_8888 default (4 byte/pixel) itu ~48MB/detik alokasi yang
-     * langsung dibuang lagi, bikin GC jalan terus-terusan dan live view kelihatan
-     * lancar sebentar (~2 detik, sebelum young-gen heap penuh) lalu patah-patah
-     * berulang selama sesi (GC pause tiap heap penuh lagi). RGB_565 motong alokasi
-     * itu jadi separuh, cukup buat nurunin frekuensi GC secara signifikan tanpa
-     * ngubah kualitas foto hasil akhir (yang tetap lewat decodeBitmap() biasa).
-     */
-    fun decodeLiveViewFrame(bytes: ByteArray): Bitmap? {
-        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, liveViewDecodeOptions)
     }
 }

@@ -68,12 +68,6 @@ android {
         compose = true
         buildConfig = true
     }
-    externalNativeBuild {
-        cmake {
-            path = file("CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
 }
 
 dependencies {
@@ -103,4 +97,10 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Komunikasi kamera via PTP over USB (Canon EOS + Nikon) — menggantikan
+    // implementasi native/libusb kustom sebelumnya. Vendor lokal (module
+    // :es-ptp-camera-patched) dari ReemMousaES/es-ptp-camera v1.0.3 dengan
+    // patch inMutable untuk live view -- lihat NOTICE.md di module tsb.
+    implementation(project(":es-ptp-camera-patched"))
 }

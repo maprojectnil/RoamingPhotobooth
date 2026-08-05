@@ -19,10 +19,10 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = uri("https://jitpack.io") }
     }
 }
 
 rootProject.name = "RoamingPhotobooth"
 include(":app")
+include(":es-ptp-camera-patched")
 
