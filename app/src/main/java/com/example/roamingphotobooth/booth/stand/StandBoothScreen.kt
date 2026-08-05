@@ -17,6 +17,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -58,6 +60,10 @@ fun StandBoothScreen(
     reviewBitmap: Bitmap?,
     currentSlotNumber: Int,
     totalSlots: Int,
+    // <-- BARU: setting Mirror aktif untuk SESI INI (lihat MainActivity.sessionMirrorEnabled).
+    // Toggle switch-nya ada di Stand Preview (CaptureContent) lewat [onMirrorToggle].
+    mirrorEnabled: Boolean,
+    onMirrorToggle: (Boolean) -> Unit,
     onBackClick: () -> Unit,
     onContinueClick: () -> Unit,
     onShutterClick: () -> Unit,
@@ -104,20 +110,26 @@ fun StandBoothScreen(
                     isProcessing = isProcessing,
                     currentSlotNumber = currentSlotNumber,
                     totalSlots = totalSlots,
+                    mirrorEnabled = mirrorEnabled,
                     onShutterClick = onShutterClick
                 )
 
-                IconButton(
-                    onClick = onBackClick,
+                // Tombol back + toggle Mirror — pojok kanan atas, sejajar (sama pola
+                // dengan Row back/setting di MobileBoothScreen).
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(16.dp)
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "←",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = Color.White
-                    )
+                    MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
+                    IconButton(onClick = onBackClick) {
+                        Text(
+                            text = "←",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = Color.White
+                        )
+                    }
                 }
             }
         }
@@ -149,6 +161,7 @@ private fun CaptureContent(
     isProcessing: Boolean,
     currentSlotNumber: Int,
     totalSlots: Int,
+    mirrorEnabled: Boolean,
     onShutterClick: () -> Unit
 ) {
     // Split-screen: kiri ~30% preview frame (frame + foto yang sudah terisi),
@@ -188,11 +201,13 @@ private fun CaptureContent(
                     bitmap = liveViewBitmap.asImageBitmap(),
                     contentDescription = "Live View",
                     contentScale = ContentScale.Crop,
-                    // Mirror horizontal (efek cermin) — cuma tampilan, bitmap aslinya
-                    // yang dipakai buat capture/simpan tetap tidak berubah.
+                    // Mirror horizontal (efek cermin), cuma diterapkan kalau setting
+                    // Mirror Camera aktif untuk sesi ini (lihat [mirrorEnabled]) —
+                    // konsisten dengan mirror yang diterapkan ke bitmap hasil capture
+                    // di TemplateSessionManager.addPhoto (lihat mirrorEnabled param).
                     modifier = Modifier
                         .fillMaxSize()
-                        .scale(scaleX = -1f, scaleY = 1f)
+                        .let { if (mirrorEnabled) it.scale(scaleX = -1f, scaleY = 1f) else it }
                 )
             }
 
@@ -292,6 +307,38 @@ private fun ReviewContent(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
+        }
+    }
+}
+
+/**
+ * Toggle switch Mirror di Stand Preview (lihat spesifikasi Session Preview >
+ * Mirror). Mengontrol setting AKTIF untuk sesi yang sedang berjalan — beda
+ * dari default global di Settings > Session (lihat SessionSettingsScreen).
+ * Perubahan di sini langsung berlaku ke preview live view DAN ke foto hasil
+ * capture berikutnya (lewat mirrorEnabled yang diteruskan ke
+ * TemplateSessionManager.addPhoto), tanpa mengubah default global.
+ */
+@Composable
+private fun MirrorToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp)
+        ) {
+            Text(
+                text = "Mirror",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White
+            )
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF4DD0E1))
+            )
         }
     }
 }

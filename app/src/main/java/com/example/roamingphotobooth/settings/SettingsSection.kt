@@ -9,5 +9,7 @@ enum class SettingsSection(val label: String, val assetIconName: String) {
     FRAME_LIST("Frame List", "framelist.svg"),
     APPEARANCE("Appearance", "appearance.svg"),
     // <-- BARU: cari & pilih Print Server (dulu di FinalResultScreen, sekarang di sini).
-    PRINTER("Printer", "printer.svg")
+    PRINTER("Printer", "printer.svg"),
+    // <-- BARU: default Countdown Timer / Mirror Camera / Auto Countdown untuk sesi baru.
+    SESSION("Session", "session.svg")
 }

@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -77,6 +79,10 @@ fun MobileBoothScreen(
     totalSlots: Int,
     finalResultBitmap: Bitmap?,
     qrCodeBitmap: Bitmap?,
+    // <-- BARU: setting Mirror aktif untuk SESI INI (lihat MainActivity.sessionMirrorEnabled).
+    // Toggle switch-nya ada di sini (Mobile Preview), di Row tombol pojok kanan atas.
+    mirrorEnabled: Boolean,
+    onMirrorToggle: (Boolean) -> Unit,
     onBackClick: () -> Unit,
     onContinueClick: () -> Unit,
     onSettingsClick: () -> Unit
@@ -106,17 +112,20 @@ fun MobileBoothScreen(
                     previewBitmap = previewBitmap,
                     activeTemplate = activeTemplate,
                     currentSlotNumber = currentSlotNumber,
-                    totalSlots = totalSlots
+                    totalSlots = totalSlots,
+                    mirrorEnabled = mirrorEnabled
                 )
             }
 
-            // Tombol back & setting — pojok kanan atas, sejajar.
+            // Tombol back & setting — pojok kanan atas, sejajar + toggle Mirror.
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
                 IconButton(onClick = onSettingsClick) {
                     Text(
                         text = "⚙️",
@@ -165,7 +174,8 @@ private fun FrameCaptureArea(
     previewBitmap: Bitmap?,
     activeTemplate: PhotoTemplate?,
     currentSlotNumber: Int,
-    totalSlots: Int
+    totalSlots: Int,
+    mirrorEnabled: Boolean
 ) {
     // Bitmap teratas yg digambar di atas live view: preview (bingkai + foto2 yang
     // sudah ke-capture di slot masing2, slot yang belum diisi transparan) kalau ada,
@@ -249,12 +259,13 @@ private fun FrameCaptureArea(
                                 bitmap = liveViewBitmap.asImageBitmap(),
                                 contentDescription = "Live View",
                                 contentScale = ContentScale.Crop,
-                                // Mirror horizontal (efek cermin) — cuma di layer live
-                                // view ini, bitmap asli yang dipakai buat capture/simpan
-                                // tidak berubah, ini cuma efek tampilan.
+                                // Mirror horizontal (efek cermin), cuma diterapkan kalau
+                                // setting Mirror Camera aktif untuk sesi ini — konsisten
+                                // dengan mirror yang diterapkan ke bitmap hasil capture
+                                // (lihat mirrorEnabled param di TemplateSessionManager.addPhoto).
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .scale(scaleX = -1f, scaleY = 1f)
+                                    .let { if (mirrorEnabled) it.scale(scaleX = -1f, scaleY = 1f) else it }
                             )
                         }
                     }
@@ -267,7 +278,7 @@ private fun FrameCaptureArea(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .fillMaxSize()
-                            .scale(scaleX = -1f, scaleY = 1f)
+                            .let { if (mirrorEnabled) it.scale(scaleX = -1f, scaleY = 1f) else it }
                     )
                 }
             }
@@ -302,6 +313,37 @@ private fun FrameCaptureArea(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Toggle switch Mirror di Mobile Preview (lihat spesifikasi Session Preview >
+ * Mirror). Mengontrol setting AKTIF untuk sesi yang sedang berjalan — beda
+ * dari default global di Settings > Session (lihat SessionSettingsScreen).
+ * Perubahan di sini langsung berlaku ke preview live view DAN ke foto hasil
+ * capture berikutnya, tanpa mengubah default global.
+ */
+@Composable
+private fun MirrorToggle(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.6f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 4.dp)
+        ) {
+            Text(
+                text = "Mirror",
+                style = MaterialTheme.typography.labelMedium,
+                color = Color.White
+            )
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF4DD0E1))
+            )
         }
     }
 }

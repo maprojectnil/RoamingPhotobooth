@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -113,6 +114,8 @@ private fun SectionIcon(section: SettingsSection) {
             SettingsSection.APPEARANCE -> Icons.Filled.Palette
             // <-- BARU: fallback icon untuk section Printer (dropdown pilih printer).
             SettingsSection.PRINTER -> Icons.Filled.Print
+            // <-- BARU: fallback icon untuk section Session (countdown/mirror/auto countdown).
+            SettingsSection.SESSION -> Icons.Filled.Timer
         }
         Icon(
             imageVector = fallbackIcon,

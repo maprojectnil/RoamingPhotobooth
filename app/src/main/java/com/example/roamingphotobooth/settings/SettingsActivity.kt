@@ -65,6 +65,7 @@ class SettingsActivity : ComponentActivity() {
     private lateinit var templateStorage: TemplateStorage
     private lateinit var mediaFileManager: MediaFileManager
     private lateinit var appearanceStorage: AppearanceStorage
+    private lateinit var sessionSettingsStorage: SessionSettingsStorage
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +74,7 @@ class SettingsActivity : ComponentActivity() {
         templateStorage = TemplateStorage(this)
         mediaFileManager = MediaFileManager(this)
         appearanceStorage = AppearanceStorage(this)
+        sessionSettingsStorage = SessionSettingsStorage(this)
 
         setContent {
             RoamingPhotoboothTheme {
@@ -181,6 +183,21 @@ class SettingsActivity : ComponentActivity() {
                     // self-contained — baca/simpan sendiri lewat PrintServerRepository,
                     // tidak butuh state apa pun dari SettingsActivity.
                     SettingsSection.PRINTER -> PrinterSettingsScreen()
+
+                    // <-- BARU: default Countdown Timer / Mirror Camera / Auto Countdown.
+                    // Sama seperti Appearance, disimpan lewat storage-nya sendiri
+                    // (SessionSettingsStorage) — tidak butuh state dari activity lain.
+                    SettingsSection.SESSION -> SessionSettingsScreen(
+                        initialSettings = remember { sessionSettingsStorage.load() },
+                        onSave = { updated ->
+                            sessionSettingsStorage.save(updated)
+                            android.widget.Toast.makeText(
+                                this@SettingsActivity,
+                                "Session tersimpan!",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    )
                 }
             }
         }

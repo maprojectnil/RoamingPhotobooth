@@ -48,8 +48,13 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
     /**
      * Panggil ini setiap kali foto baru berhasil di-capture.
      * Otomatis masuk ke slot berikutnya yang masih kosong.
+     *
+     * [mirror] mengikuti setting "Mirror Camera" (default dari Settings > Session,
+     * bisa di-override per-sesi lewat toggle Mirror di Session Preview — lihat
+     * MainActivity.sessionMirrorEnabled). Default `true` di sini supaya caller lama
+     * yang belum diupdate tetap dapat behavior asli (mirror selalu aktif).
      */
-    fun addPhoto(photoBytes: ByteArray): AddPhotoResult {
+    fun addPhoto(photoBytes: ByteArray, mirror: Boolean = true): AddPhotoResult {
         val slotOrder = nextSlotOrder() ?: run {
             Log.w(TAG, "addPhoto dipanggil tapi semua slot sudah penuh")
             return AddPhotoResult.ALL_SLOTS_FULL
@@ -68,9 +73,16 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
 
         // Mirror horizontal (efek cermin) di sini, di titik paling awal — supaya
         // preview kiri, layar review, dan hasil akhir yang disimpan/di-upload semua
-        // otomatis konsisten pakai foto yang sudah ke-flip ini.
-        val bitmap = BitmapMerger.mirrorHorizontal(decoded)
-        decoded.recycle()
+        // otomatis konsisten pakai foto yang sudah ke-flip ini. Cuma dilakukan kalau
+        // [mirror] true (setting Mirror Camera aktif untuk sesi ini) — kalau false,
+        // foto dipakai apa adanya tanpa di-flip.
+        val bitmap = if (mirror) {
+            val mirrored = BitmapMerger.mirrorHorizontal(decoded)
+            decoded.recycle()
+            mirrored
+        } else {
+            decoded
+        }
 
         capturedPhotos[slotOrder] = bitmap
         Log.i(TAG, "Foto masuk ke slot $slotOrder. Progress: $filledSlots/$totalSlots")

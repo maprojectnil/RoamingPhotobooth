@@ -29,7 +29,13 @@ import com.example.roamingphotobooth.settings.BackgroundLayer
 fun HomeScreen(
     onMulaiClick: () -> Unit,
     onSettingsClick: () -> Unit,
-    appearance: AppearanceSettings = AppearanceSettings()
+    appearance: AppearanceSettings = AppearanceSettings(),
+    // <-- BARU: Kiosk Mode — tombol gembok pojok kanan atas (lihat KioskModeButton).
+    // Default aman (nonaktif, no-op) supaya pemanggil lama yang belum diupdate
+    // tetap kompilasi & jalan seperti sebelumnya.
+    kioskModeEnabled: Boolean = false,
+    onEnableKioskMode: () -> Unit = {},
+    onDisableKioskMode: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -53,6 +59,17 @@ fun HomeScreen(
                 style = MaterialTheme.typography.headlineSmall
             )
         }
+
+        // Tombol Kiosk Mode — pojok kanan atas, opacity rendah supaya tidak
+        // mengganggu tampilan Home (lihat KioskModeButton untuk logic password).
+        KioskModeButton(
+            enabled = kioskModeEnabled,
+            onEnable = onEnableKioskMode,
+            onDisable = onDisableKioskMode,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+        )
 
         // Tombol Mulai — tengah layar
         Button(

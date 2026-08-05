@@ -76,6 +76,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var appearanceStorage: AppearanceStorage
     private var appearanceSettings = mutableStateOf(AppearanceSettings())
 
+    // Default Session settings (Countdown Timer / Mirror Camera / Auto Countdown),
+    // diatur lewat Settings > Session — lihat SessionSettingsScreen. Dibaca ulang
+    // begitu balik dari SettingsActivity (sama pola dengan appearanceSettings).
+    private lateinit var sessionSettingsStorage: com.example.roamingphotobooth.settings.SessionSettingsStorage
+    private var sessionSettings = mutableStateOf(com.example.roamingphotobooth.settings.SessionSettings())
+
+    // Setting Mirror AKTIF untuk sesi yang SEDANG berjalan — diisi dari
+    // sessionSettings.value.mirrorCamera setiap kali sesi baru dimulai
+    // (loadActiveTemplate/startNewSession), tapi bisa di-override sendiri oleh
+    // user lewat toggle Mirror di Session Preview (Mobile/Stand) TANPA mengubah
+    // default global di atas. Lihat MobileBoothScreen/StandBoothScreen onMirrorToggle.
+    private var sessionMirrorEnabled = mutableStateOf(true)
+
+    // Kiosk Mode — diaktifkan/nonaktifkan lewat tombol gembok di HomeScreen (lihat
+    // KioskModeButton). Saat aktif, layar dikunci pakai Android Screen Pinning API
+    // (startLockTask) supaya user tidak bisa keluar app lewat Recents/Home; keluar
+    // dari Kiosk Mode wajib lewat dialog password di HomeScreen (default "0000").
+    private var kioskModeEnabled = mutableStateOf(false)
+
     // Navigasi layar: Home -> pilih mode (Mobile/Stand) -> layar booth (live view + capture)
     private var currentScreen = mutableStateOf(AppScreen.HOME)
     private var boothMode = mutableStateOf<BoothMode?>(null)
@@ -145,6 +164,39 @@ class MainActivity : ComponentActivity() {
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) {
         appearanceSettings.value = appearanceStorage.load()
+        // <-- BARU: reload default Session settings juga -- kalau user baru saja
+        // ubah Countdown/Mirror/Auto Countdown default di Settings > Session,
+        // langsung kepakai untuk sesi berikutnya tanpa perlu restart app.
+        sessionSettings.value = sessionSettingsStorage.load()
+    }
+
+    /**
+     * Aktifkan Kiosk Mode: pakai Android Screen Pinning API (startLockTask) supaya
+     * user tidak bisa keluar app lewat tombol Home/Recents/notification shade
+     * selagi aktif. Ini API bawaan Android (tidak butuh app jadi Device Owner),
+     * jadi cukup dipanggil langsung dari sini — lihat KioskModeButton di HomeScreen
+     * untuk UI tombol & dialog password saat menonaktifkan.
+     */
+    private fun enableKioskMode() {
+        kioskModeEnabled.value = true
+        try {
+            startLockTask()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Gagal mengaktifkan Kiosk Mode (startLockTask): ${e.message}")
+        }
+    }
+
+    /**
+     * Nonaktifkan Kiosk Mode — HANYA dipanggil dari KioskModeButton setelah
+     * password yang dimasukkan user terverifikasi benar (lihat KioskPasswordDialog).
+     */
+    private fun disableKioskMode() {
+        kioskModeEnabled.value = false
+        try {
+            stopLockTask()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Gagal menonaktifkan Kiosk Mode (stopLockTask): ${e.message}")
+        }
     }
 
     private fun updateOrientation() {
@@ -179,6 +231,9 @@ class MainActivity : ComponentActivity() {
         frameFileManager = com.example.roamingphotobooth.template.FrameFileManager(this)
         appearanceStorage = AppearanceStorage(this)
         appearanceSettings.value = appearanceStorage.load()
+        sessionSettingsStorage = com.example.roamingphotobooth.settings.SessionSettingsStorage(this)
+        sessionSettings.value = sessionSettingsStorage.load()
+        sessionMirrorEnabled.value = sessionSettings.value.mirrorCamera
 
         setContent {
             RoamingPhotoboothTheme {
@@ -190,7 +245,10 @@ class MainActivity : ComponentActivity() {
                                 android.content.Intent(this, SettingsActivity::class.java)
                             )
                         },
-                        appearance = appearanceSettings.value
+                        appearance = appearanceSettings.value,
+                        kioskModeEnabled = kioskModeEnabled.value,
+                        onEnableKioskMode = { enableKioskMode() },
+                        onDisableKioskMode = { disableKioskMode() }
                     )
 
                     AppScreen.MODE_SELECT -> ModeSelectScreen(
@@ -214,6 +272,8 @@ class MainActivity : ComponentActivity() {
                             totalSlots = templateSession?.totalSlots ?: 0,
                             finalResultBitmap = finalResultBitmap.value,
                             qrCodeBitmap = qrCodeBitmap.value,
+                            mirrorEnabled = sessionMirrorEnabled.value,
+                            onMirrorToggle = { sessionMirrorEnabled.value = it },
                             onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
                             onContinueClick = { startNewSession() },
                             onSettingsClick = {
@@ -235,6 +295,8 @@ class MainActivity : ComponentActivity() {
                             reviewBitmap = standReviewBitmap.value,
                             currentSlotNumber = (templateSession?.filledSlots ?: 0) + 1,
                             totalSlots = templateSession?.totalSlots ?: 0,
+                            mirrorEnabled = sessionMirrorEnabled.value,
+                            onMirrorToggle = { sessionMirrorEnabled.value = it },
                             onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
                             onContinueClick = { startNewSession() },
                             onShutterClick = { standStartCountdownAndCapture() },
@@ -345,8 +407,13 @@ class MainActivity : ComponentActivity() {
                 // Tidak ada template aktif — fallback ke behavior lama (1 foto, frame test)
                 runOnUiThread { statusText.value = "📸 Foto diterima! (tanpa template aktif)" }
                 val decodedPhoto = BitmapMerger.decodeBitmap(photoBytes) ?: return@merge
-                val cameraPhoto = BitmapMerger.mirrorHorizontal(decodedPhoto)
-                decodedPhoto.recycle()
+                val cameraPhoto = if (sessionMirrorEnabled.value) {
+                    val mirrored = BitmapMerger.mirrorHorizontal(decodedPhoto)
+                    decodedPhoto.recycle()
+                    mirrored
+                } else {
+                    decodedPhoto
+                }
                 val testFrame = createTestFrame(cameraPhoto.width, cameraPhoto.height)
                 val merged = BitmapMerger.mergeBitmap(cameraPhoto, testFrame)
                 val savedUri = saveMergedBitmap(merged)
@@ -354,7 +421,7 @@ class MainActivity : ComponentActivity() {
                 return@merge
             }
 
-            val addResult = templateSess.addPhoto(photoBytes)
+            val addResult = templateSess.addPhoto(photoBytes, mirror = sessionMirrorEnabled.value)
             if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
                 val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
                     "⚠️ Foto gagal diproses (korup) — jepret ulang untuk slot ini"
@@ -400,6 +467,9 @@ class MainActivity : ComponentActivity() {
         frameOverlayBitmap.value = frameBmp
         finalResultBitmap.value = null
         qrCodeBitmap.value = null
+        // Sesi baru -> pakai default Mirror dari Settings > Session (bisa
+        // di-override lagi per-sesi lewat toggle di Session Preview).
+        sessionMirrorEnabled.value = sessionSettings.value.mirrorCamera
         refreshPreview(showEmptySlotPlaceholders)
 
         statusText.value = "Template '${template.name}' aktif (${template.slotCount} slot foto)"
@@ -445,6 +515,10 @@ class MainActivity : ComponentActivity() {
         templateSession?.reset()
         finalResultBitmap.value = null
         qrCodeBitmap.value = null
+        // Sesi baru -> balik ke default Mirror dari Settings > Session, buang
+        // override per-sesi sebelumnya (contoh di spesifikasi: sesi berikutnya
+        // tetap pakai default meski sesi sebelumnya sempat diubah manual).
+        sessionMirrorEnabled.value = sessionSettings.value.mirrorCamera
         refreshPreview()
         statusText.value = activeTemplate.value?.let {
             "Template '${it.name}' aktif (${it.slotCount} slot foto)"
@@ -474,7 +548,9 @@ class MainActivity : ComponentActivity() {
         if (standIsCapturing.value || standCountdownValue.value != null || standIsProcessing.value) return // cegah double-tap
 
         lifecycleScope.launch {
-            for (i in 3 downTo 1) {
+            // Durasi countdown ikut setting default Countdown Timer (Settings > Session,
+            // lihat SessionSettingsScreen) -- bukan lagi hardcoded 3 detik.
+            for (i in sessionSettings.value.countdownSeconds downTo 1) {
                 standCountdownValue.value = i
                 delay(1000)
             }
@@ -495,7 +571,9 @@ class MainActivity : ComponentActivity() {
                     // yang tampil di layar REVIEW sudah sama persis orientasinya dengan
                     // yang bakal masuk ke slot kalau user tekan "Lanjut".
                     val decoded = BitmapMerger.decodeBitmap(photoBytes)
-                    standReviewBitmap.value = decoded?.let { BitmapMerger.mirrorHorizontal(it) }
+                    standReviewBitmap.value = decoded?.let {
+                        if (sessionMirrorEnabled.value) BitmapMerger.mirrorHorizontal(it) else it
+                    }
                     standIsCapturing.value = false
                 }
             }
@@ -552,7 +630,8 @@ class MainActivity : ComponentActivity() {
         standIsProcessing.value = true
 
         lifecycleScope.launch(Dispatchers.IO) {
-            val addResult = session.addPhoto(photoBytes) // decode bitmap res-penuh, berat -> background
+            // decode bitmap res-penuh, berat -> background
+            val addResult = session.addPhoto(photoBytes, mirror = sessionMirrorEnabled.value)
 
             if (addResult != com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.ADDED) {
                 val msg = if (addResult == com.example.roamingphotobooth.template.TemplateSessionManager.AddPhotoResult.DECODE_FAILED) {
@@ -595,6 +674,16 @@ class MainActivity : ComponentActivity() {
                     finalResultBitmap.value = finalImage
                 }
                 standIsProcessing.value = false
+
+                // Auto Countdown for Next Slots (Settings > Session): kalau ON dan
+                // masih ada slot berikutnya (belum selesai), langsung mulai countdown
+                // otomatis tanpa nunggu user tap shutter lagi. Berlaku mulai dari slot
+                // kedua dan seterusnya -- foto PERTAMA tiap sesi tetap wajib manual
+                // tap shutter (baru dari sinilah, tiap "Lanjut" berikutnya, alur ini
+                // yang memicu countdown slot selanjutnya).
+                if (finalImage == null && sessionSettings.value.autoCountdownNextSlots) {
+                    standStartCountdownAndCapture()
+                }
             }
         }
     }
