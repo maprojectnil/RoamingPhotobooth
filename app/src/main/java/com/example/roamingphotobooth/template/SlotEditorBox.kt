@@ -43,11 +43,13 @@ private const val MIN_HALF_SIZE_RATIO = MIN_SIZE_RATIO / 2f
  * posisi bingkai), dan dihapus (ikon X).
  *
  * **Smart Snap**: selama digeser/diresize, tepi & titik tengah slot otomatis "nyantol"
- * (snap) ke garis Center, Thirds, Quarters, atau Edges bingkai kalau jaraknya masih di
- * dalam threshold (lihat [SmartSnap]). Jenis snap mana yang aktif diatur lewat
- * [snapSettings] (toggle-nya ada di panel kontrol). Setiap kali ada garis yang kena
- * snap, [onSnapGuidesChanged] dipanggil supaya workspace bisa gambar garis panduannya;
- * begitu drag selesai, dipanggil lagi dengan [SnapGuides.NONE] buat hapus garisnya.
+ * (snap) ke garis Quarters bingkai kalau jaraknya masih di dalam threshold (lihat
+ * [SmartSnap]). Snap ini SENGAJA cuma jalan di sumbu X (garis vertikal / posisi
+ * horizontal) — sumbu Y dibiarkan bebas sepenuhnya supaya geser/resize naik-turun
+ * tetap leluasa. Aktif/nonaktifnya diatur lewat [snapSettings] (toggle-nya ada di
+ * panel kontrol). Setiap kali ada garis yang kena snap, [onSnapGuidesChanged]
+ * dipanggil supaya workspace bisa gambar garis panduannya; begitu drag selesai,
+ * dipanggil lagi dengan [SnapGuides.NONE] buat hapus garisnya.
  *
  * [isShared] = true kalau ada slot LAIN dengan `order` yang sama (hasil duplikat) —
  * dikasih warna beda supaya user ngeh slot-slot itu bakal keisi 1 foto yang sama.
@@ -90,11 +92,25 @@ fun SlotEditorBox(
             .background(accentColor.copy(alpha = 0.22f))
             .border(2.dp, accentColor, RoundedCornerShape(10.dp))
             .pointerInput(slot.id) {
+                // NOTE: dua var ini SENGAJA gak diinisialisasi di sini (di luar
+                // detectDragGestures). pointerInput block cuma dieksekusi ULANG kalau
+                // key-nya (slot.id) berubah, bukan tiap kali gesture baru dimulai — jadi
+                // kalau diisi di sini, nilainya "beku" di posisi awal composable ini
+                // dipasang & gak ke-refresh walau slot udah dipindah/di-resize lewat
+                // gesture LAIN (mis. abis resize, terus mau geser lagi -> balik ke
+                // posisi lama). Makanya diisi ulang tiap `onDragStart` dari
+                // `currentSlot.value` (posisi TERBARU) supaya tiap gesture baru mulai
+                // dari posisi aktual sekarang, bukan posisi basi.
                 var currentXRatio = slot.xRatio
                 var currentYRatio = slot.yRatio
 
                 detectDragGestures(
-                    onDragStart = { Log.d(TAG, "Drag START slot=${slot.id}") },
+                    onDragStart = {
+                        val latest = currentSlot.value
+                        currentXRatio = latest.xRatio
+                        currentYRatio = latest.yRatio
+                        Log.d(TAG, "Drag START slot=${slot.id} x=$currentXRatio y=$currentYRatio")
+                    },
                     onDragEnd = {
                         Log.d(TAG, "Drag END slot=${slot.id}")
                         onSnapGuidesChanged(SnapGuides.NONE)
@@ -110,23 +126,20 @@ fun SlotEditorBox(
                     val rawX = (currentXRatio + dxRatio).coerceIn(0f, 1f - latest.widthRatio)
                     val rawY = (currentYRatio + dyRatio).coerceIn(0f, 1f - latest.heightRatio)
 
-                    // Smart Snap: coba tarik tepi kiri/tengah/kanan (X) & atas/tengah/bawah (Y)
-                    // slot ke garis Center/Thirds/Quarters/Edges terdekat sesuai toggle aktif.
+                    // Smart Snap: HANYA di sumbu X (garis vertikal) — coba tarik tepi
+                    // kiri/tengah/kanan slot ke garis Quarters terdekat kalau toggle aktif.
+                    // Sumbu Y (naik-turun) dibiarkan bebas, gak pernah di-snap.
                     val targets = SmartSnap.buildTargets(currentSnapSettings.value)
                     val (snappedX, hitX) = SmartSnap.snapPosition(
                         rawX, latest.widthRatio, containerWidthPx, snapThresholdPx, targets
                     )
-                    val (snappedY, hitY) = SmartSnap.snapPosition(
-                        rawY, latest.heightRatio, containerHeightPx, snapThresholdPx, targets
-                    )
 
                     currentXRatio = snappedX.coerceIn(0f, 1f - latest.widthRatio)
-                    currentYRatio = snappedY.coerceIn(0f, 1f - latest.heightRatio)
+                    currentYRatio = rawY
 
                     onSnapGuidesChanged(
                         SnapGuides(
-                            vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap(),
-                            horizontal = hitY?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
+                            vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
                         )
                     )
 
@@ -196,19 +209,40 @@ fun SlotEditorBox(
                     // Lacak setengah-lebar & setengah-tinggi (jarak pusat -> tepi), karena
                     // scale-from-center pada dasarnya cuma punya 1 derajat kebebasan per
                     // sumbu: seberapa jauh tepi dari pusat yang TETAP diam.
+                    //
+                    // PENTING (fix bug "slot lompat ke titik awal pas resize"): nilai-nilai
+                    // di bawah ini dulu dihitung SEKALI di luar detectDragGestures, dari
+                    // `slot` yang cuma "segar" pas composable ini PERTAMA kali dipasang.
+                    // Tapi pointerInput block cuma di-restart kalau key-nya (slot.id)
+                    // berubah — bukan tiap gesture baru — jadi kalau slot udah pindah
+                    // posisi lewat gesture lain (geser, atau resize sebelumnya yang beda
+                    // sesi), nilai centerX/centerY yang "beku" itu jadi basi & bikin slot
+                    // kelihatan lompat balik ke titik pusat yang lama pas mulai resize lagi.
+                    // Makanya sekarang semuanya `var` dan DIHITUNG ULANG di `onDragStart`
+                    // dari `currentSlot.value` (state paling baru), supaya tiap sesi resize
+                    // baru selalu mulai dari titik pusat & ukuran yang aktual saat itu.
                     var halfWidthRatio = slot.widthRatio / 2f
                     var halfHeightRatio = slot.heightRatio / 2f
-
-                    // Titik pusat DIHITUNG SEKALI di awal gesture (bukan diturunkan ulang dari
-                    // state ter-recompose tiap event) — sesuai definisi "scale from center":
-                    // pusatnya adalah invarian selama 1 gesture resize berlangsung, jadi jangan
-                    // sampai keikut goyang oleh state yang mungkin belum sempat ke-recompose.
-                    val centerX = slot.xRatio + slot.widthRatio / 2f
-                    val centerY = slot.yRatio + slot.heightRatio / 2f
-                    val maxHalfW = min(centerX, 1f - centerX)
-                    val maxHalfH = min(centerY, 1f - centerY)
+                    var centerX = slot.xRatio + slot.widthRatio / 2f
+                    var centerY = slot.yRatio + slot.heightRatio / 2f
+                    var maxHalfW = min(centerX, 1f - centerX)
+                    var maxHalfH = min(centerY, 1f - centerY)
 
                     detectDragGestures(
+                        onDragStart = {
+                            val latest = currentSlot.value
+                            halfWidthRatio = latest.widthRatio / 2f
+                            halfHeightRatio = latest.heightRatio / 2f
+                            centerX = latest.xRatio + latest.widthRatio / 2f
+                            centerY = latest.yRatio + latest.heightRatio / 2f
+                            maxHalfW = min(centerX, 1f - centerX)
+                            maxHalfH = min(centerY, 1f - centerY)
+                            Log.d(
+                                TAG,
+                                "Resize START slot=${slot.id} centerX=$centerX centerY=$centerY " +
+                                        "halfW=$halfWidthRatio halfH=$halfHeightRatio"
+                            )
+                        },
                         onDragEnd = { onSnapGuidesChanged(SnapGuides.NONE) },
                         onDragCancel = { onSnapGuidesChanged(SnapGuides.NONE) }
                     ) { change, dragAmount ->
@@ -224,24 +258,20 @@ fun SlotEditorBox(
                         val rawHalfH = (halfHeightRatio + dragAmount.y / containerHeightPx)
                             .coerceIn(MIN_HALF_SIZE_RATIO, maxHalfH)
 
-                        // Smart Snap: coba tarik tepi kanan (X) & tepi bawah (Y) — yang otomatis
-                        // berarti tepi kiri/atas di sisi berlawanan ikut ke garis simetrisnya,
-                        // karena pusatnya diam — ke garis Center/Thirds/Quarters/Edges terdekat.
+                        // Smart Snap: HANYA di sumbu X — coba tarik tepi kanan slot ke garis
+                        // Quarters terdekat (tepi kiri di sisi berlawanan ikut simetris karena
+                        // pusatnya diam). Sumbu Y (tinggi) dibiarkan bebas, gak pernah di-snap.
                         val targets = SmartSnap.buildTargets(currentSnapSettings.value)
                         val (snappedHalfW, hitX) = SmartSnap.snapHalfExtent(
                             centerX, rawHalfW, containerWidthPx, snapThresholdPx, targets
                         )
-                        val (snappedHalfH, hitY) = SmartSnap.snapHalfExtent(
-                            centerY, rawHalfH, containerHeightPx, snapThresholdPx, targets
-                        )
 
                         halfWidthRatio = snappedHalfW.coerceIn(MIN_HALF_SIZE_RATIO, maxHalfW)
-                        halfHeightRatio = snappedHalfH.coerceIn(MIN_HALF_SIZE_RATIO, maxHalfH)
+                        halfHeightRatio = rawHalfH
 
                         onSnapGuidesChanged(
                             SnapGuides(
-                                vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap(),
-                                horizontal = hitY?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
+                                vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
                             )
                         )
 

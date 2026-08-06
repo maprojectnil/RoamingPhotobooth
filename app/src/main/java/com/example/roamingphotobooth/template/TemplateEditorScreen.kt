@@ -16,10 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CollectionsBookmark
@@ -231,8 +231,8 @@ private fun WorkspacePane(
             Text(
                 text = "Geser slot untuk memindah • tarik pojok kanan-bawah untuk resize dari " +
                         "tengah (Scale from Center) • ikon salin untuk duplikat slot (1 foto dipakai " +
-                        "di beberapa posisi) • slot otomatis nyantol (Smart Snap) ke garis tengah/" +
-                        "pertiga/perempat/tepi bingkai",
+                        "di beberapa posisi) • slot otomatis nyantol (Smart Snap) ke garis seperempat " +
+                        "bingkai secara horizontal",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF7E8592)
             )
@@ -302,7 +302,16 @@ private fun ControlPanel(
         colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33)),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
     ) {
-        Column(modifier = Modifier.fillMaxSize().padding(18.dp)) {
+        // PENTING: jendela "Pengaturan Bingkai" ini bisa jadi lebih tinggi dari layar
+        // (nama template, jumlah foto, Smart Snap, daftar slot, tombol simpan — makin
+        // banyak slot makin panjang), jadi Column-nya dibungkus verticalScroll supaya
+        // seluruh isinya tetap bisa dijangkau dengan scroll, gak kepotong/ke-clip.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(18.dp)
+        ) {
             Text(
                 text = "Pengaturan Bingkai",
                 style = MaterialTheme.typography.titleMedium,
@@ -374,36 +383,19 @@ private fun ControlPanel(
                 color = Color(0xFFC9CDD6)
             )
             Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "Nyalakan/matikan jenis garis snap saat slot digeser/diresize",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF7E8592)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
+
 
             val snapSettings = viewModel.snapSettings.value
             SnapToggleRow(
-                type = SnapType.CENTER,
-                checked = snapSettings.centerEnabled,
-                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.CENTER, it) }
-            )
-            SnapToggleRow(
-                type = SnapType.THIRDS,
-                checked = snapSettings.thirdsEnabled,
-                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.THIRDS, it) }
-            )
-            SnapToggleRow(
                 type = SnapType.QUARTERS,
-                checked = snapSettings.quartersEnabled,
-                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.QUARTERS, it) }
-            )
-            SnapToggleRow(
-                type = SnapType.EDGES,
-                checked = snapSettings.edgesEnabled,
-                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.EDGES, it) }
+                checked = snapSettings.enabled,
+                onCheckedChange = { viewModel.setSnapEnabled(it) }
             )
 
             Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = Color(0xFF3A3F4A))
+            Spacer(modifier = Modifier.height(14.dp))
+
             Text(
                 text = "Daftar Slot",
                 style = MaterialTheme.typography.labelLarge,
@@ -413,12 +405,11 @@ private fun ControlPanel(
 
             val orderCounts = viewModel.slots.groupingBy { it.order }.eachCount()
 
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(viewModel.slots.size) { index ->
-                    val slot = viewModel.slots[index]
+            // Bukan LazyColumn: panel ini sekarang dibungkus verticalScroll (lihat
+            // Column terluar di ControlPanel), jadi daftar slot ikut nge-scroll
+            // sebagai bagian dari halaman, bukan area scroll sendiri yang terpisah.
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                viewModel.slots.forEachIndexed { index, slot ->
                     val shared = (orderCounts[slot.order] ?: 0) > 1
                     SlotListRow(
                         label = "Slot ${index + 1} (foto #${slot.order})",

@@ -4,40 +4,30 @@ import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 
 /**
- * Jenis-jenis snap yang didukung Smart Snap. Tiap jenis punya toggle sendiri di
- * panel kontrol editor (lihat [SmartSnapSettings] & bagian "Smart Snap" di
- * ControlPanel pada TemplateEditorScreen).
+ * Jenis snap yang didukung Smart Snap. Disederhanakan: cuma garis seperempat
+ * (Quarters) yang tersisa — Center/Thirds/Edges sudah dihapus supaya perilaku
+ * snap lebih simpel & gak terlalu banyak "nyantol" ke mana-mana.
  */
 enum class SnapType {
-    CENTER,   // tengah bingkai (garis 50%)
-    THIRDS,   // garis rule-of-thirds (33% & 67%)
-    QUARTERS, // garis seperempat (25%, 50%, 75%)
-    EDGES     // tepi bingkai (0% & 100%)
+    QUARTERS // garis seperempat (25%, 50%, 75%)
 }
 
 /** 1 garis target snap: posisinya (rasio 0.0-1.0 relatif bingkai) + kategorinya. */
 data class SnapTarget(val ratio: Float, val type: SnapType)
 
 /**
- * Toggle per-jenis snap. Semua default aktif; user bisa matikan satu-satu lewat
- * switch di panel kontrol.
+ * Toggle Smart Snap. Cuma 1 switch sekarang (dulu per-jenis) karena cuma
+ * Quarters yang tersisa.
  */
 data class SmartSnapSettings(
-    val centerEnabled: Boolean = true,
-    val thirdsEnabled: Boolean = true,
-    val quartersEnabled: Boolean = true,
-    val edgesEnabled: Boolean = true
-) {
-    val anyEnabled: Boolean get() = centerEnabled || thirdsEnabled || quartersEnabled || edgesEnabled
-}
+    val enabled: Boolean = true
+)
 
 /**
  * Guide line yang lagi aktif ditampilkan di atas workspace saat drag/resize lagi
- * nge-snap ke suatu garis. `vertical` = garis tegak (posisi di sumbu X) yang lagi
- * kena snap, `horizontal` = garis mendatar (posisi di sumbu Y). Sumbu X & Y dipetakan
- * terpisah karena lebar & tinggi kontainer bisa beda (rasio yang sama di X belum
- * tentu align dengan rasio yang sama di Y secara visual, makanya masing-masing
- * dihitung & ditampilkan independen).
+ * nge-snap ke suatu garis. Snap sekarang cuma dipakai di sumbu X (garis VERTIKAL,
+ * buat nge-snap posisi horizontal slot) — garis horizontal (sumbu Y) sengaja
+ * dikosongkan terus supaya geser/resize ke atas-bawah tetap leluasa tanpa nyantol.
  */
 data class SnapGuides(
     val vertical: Map<Float, SnapType> = emptyMap(),
@@ -52,8 +42,9 @@ data class SnapGuides(
 
 /**
  * Mesin snap murni (stateless) buat fitur Smart Snap. Dipanggil tiap event drag dari
- * SlotEditorBox buat cari garis target (Center/Thirds/Quarters/Edges) terdekat dalam
- * jarak [THRESHOLD_DP], lalu ngembaliin posisi yang udah "ditarik" pas ke garis itu.
+ * SlotEditorBox buat cari garis Quarters terdekat dalam jarak [THRESHOLD_DP], lalu
+ * ngembaliin posisi yang udah "ditarik" pas ke garis itu. Snap ini HANYA dipakai di
+ * sumbu X oleh SlotEditorBox (lihat catatan di [SnapGuides]).
  *
  * Threshold-nya RASIONAL: didefinisikan dalam dp lalu dikonversi ke rasio berdasarkan
  * ukuran kontainer AKTUAL saat itu (bukan angka rasio tetap yang di-hardcode), supaya
@@ -62,31 +53,22 @@ data class SnapGuides(
  */
 object SmartSnap {
 
-    /** Jarak toleransi snap, dalam dp — dikonversi ke px oleh caller lewat LocalDensity. */
-    const val THRESHOLD_DP = 10f
+    /**
+     * Jarak toleransi snap, dalam dp — dikonversi ke px oleh caller lewat LocalDensity.
+     * Diturunin jadi 2dp: sebelumnya kerasa terlalu gampang "nyantol" pas drag,
+     * jadi threshold-nya dipersempit secara signifikan biar drag tetap leluasa
+     * & snap cuma kena pas beneran deket ke garis quarter.
+     */
+    const val THRESHOLD_DP = 2f
 
-    /** Bangun daftar garis target sesuai toggle yang aktif di [settings]. */
+    /** Bangun daftar garis target Quarters kalau [settings] aktif. */
     fun buildTargets(settings: SmartSnapSettings): List<SnapTarget> {
-        if (!settings.anyEnabled) return emptyList()
-        // LinkedHashMap: kalau ada rasio yang sama persis dari 2 kategori (mis. quarter
-        // 0.5 vs center 0.5), entri yang lebih dulu dimasukkan yang menang -> Center
-        // diprioritaskan di atas Quarters karena lebih "penting" secara visual.
-        val targets = LinkedHashMap<Float, SnapType>()
-        if (settings.centerEnabled) targets.putIfAbsent(0.5f, SnapType.CENTER)
-        if (settings.edgesEnabled) {
-            targets.putIfAbsent(0f, SnapType.EDGES)
-            targets.putIfAbsent(1f, SnapType.EDGES)
-        }
-        if (settings.thirdsEnabled) {
-            targets.putIfAbsent(1f / 3f, SnapType.THIRDS)
-            targets.putIfAbsent(2f / 3f, SnapType.THIRDS)
-        }
-        if (settings.quartersEnabled) {
-            targets.putIfAbsent(0.25f, SnapType.QUARTERS)
-            targets.putIfAbsent(0.5f, SnapType.QUARTERS)
-            targets.putIfAbsent(0.75f, SnapType.QUARTERS)
-        }
-        return targets.map { (ratio, type) -> SnapTarget(ratio, type) }
+        if (!settings.enabled) return emptyList()
+        return listOf(
+            SnapTarget(0.25f, SnapType.QUARTERS),
+            SnapTarget(0.5f, SnapType.QUARTERS),
+            SnapTarget(0.75f, SnapType.QUARTERS)
+        )
     }
 
     /**
@@ -166,19 +148,13 @@ object SmartSnap {
         return bestHalf to bestTarget
     }
 
-    /** Warna garis panduan per jenis snap, biar user gampang bedain jenisnya sekilas. */
+    /** Warna garis panduan Quarters. */
     fun colorFor(type: SnapType): Color = when (type) {
-        SnapType.CENTER -> Color(0xFFFF4081)
-        SnapType.THIRDS -> Color(0xFF40C4FF)
         SnapType.QUARTERS -> Color(0xFFFFEB3B)
-        SnapType.EDGES -> Color(0xFF69F0AE)
     }
 
-    /** Label singkat per jenis snap, dipakai buat switch toggle di panel kontrol. */
+    /** Label singkat, dipakai buat switch toggle di panel kontrol. */
     fun labelFor(type: SnapType): String = when (type) {
-        SnapType.CENTER -> "Center"
-        SnapType.THIRDS -> "Thirds"
         SnapType.QUARTERS -> "Quarters"
-        SnapType.EDGES -> "Edges"
     }
 }

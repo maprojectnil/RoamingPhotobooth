@@ -15,17 +15,12 @@ class TemplateEditorViewModel : ViewModel() {
 
     val slots = mutableStateListOf<PhotoSlot>()
 
-    // Toggle Smart Snap (Center/Thirds/Quarters/Edges) — dipakai SlotEditorBox saat
+    // Toggle Smart Snap (cuma Quarters, cuma sumbu X) — dipakai SlotEditorBox saat
     // drag/resize, diatur lewat switch di panel kontrol (ControlPanel).
     var snapSettings = mutableStateOf(SmartSnapSettings())
 
-    fun setSnapTypeEnabled(type: SnapType, enabled: Boolean) {
-        snapSettings.value = when (type) {
-            SnapType.CENTER -> snapSettings.value.copy(centerEnabled = enabled)
-            SnapType.THIRDS -> snapSettings.value.copy(thirdsEnabled = enabled)
-            SnapType.QUARTERS -> snapSettings.value.copy(quartersEnabled = enabled)
-            SnapType.EDGES -> snapSettings.value.copy(edgesEnabled = enabled)
-        }
+    fun setSnapEnabled(enabled: Boolean) {
+        snapSettings.value = snapSettings.value.copy(enabled = enabled)
     }
 
     fun setFrame(path: String, bitmap: Bitmap, width: Int, height: Int) {
