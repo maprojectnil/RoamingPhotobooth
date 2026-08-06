@@ -266,7 +266,18 @@ private fun TemplateCarousel(
     // BoxWithConstraints ini juga tahu TINGGI ruang yang benar-benar
     // tersedia (dari `modifier.weight(1f)` yang dikasih pemanggil) —
     // itu kunci biar kartu tidak pernah kepotong secara vertikal lagi.
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+    // contentAlignment = Center DITAMBAHKAN supaya carousel selalu rata
+    // tengah vertikal di dalam area yang dikasih (weight(1f) dari pemanggil).
+    // Sebelumnya BoxWithConstraints tidak diberi alignment sama sekali,
+    // jadi defaultnya TopStart — LazyRow (yang wrapContentHeight, tingginya
+    // cuma sebesar kartu) nempel ke ATAS, dan sisa ruang tinggi yang tidak
+    // terpakai jatuh kosong di BAWAH kartu alih-alih terbagi rata di
+    // atas-bawah. Paling kelihatan di device/orientasi yang tinggi (mis.
+    // tablet potrait), di mana kartu jauh lebih pendek dari tinggi layar.
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
         val viewportWidthPx = with(LocalDensity.current) {
             maxWidth.toPx()
         }
@@ -281,14 +292,31 @@ private fun TemplateCarousel(
         // bukan tebakan):
         // - Set landscape (rata-rata width > height): jatah lebar sebagian
         //   besar viewport (65%).
-        // - Set potrait/campuran: tetap seperti sebelumnya (58% viewport,
-        //   190dp-260dp).
+        // - Set potrait/campuran: 78% viewport, minimum 190dp.
+        //
+        // SENGAJA tidak ada batas ATAS (coerceIn ke 260dp) di sini lagi —
+        // dulu batas 260dp itu bikin kartu selalu kecil & mepet di layar
+        // besar/tablet (ruang kosong banyak) karena cap ini kepicu duluan
+        // sebelum sempat kepake ruang tingginya. Batas atas yang sesungguhnya
+        // sekarang murni datang dari `heightBasedCardWidth` di bawah — yang
+        // memang sudah dihitung proporsional dari tinggi layar yang tersedia,
+        // jadi kartu otomatis membesar mengikuti ukuran layar (tablet dapat
+        // kartu jauh lebih besar), tapi tetap dijamin tidak pernah kepotong
+        // vertikal maupun horizontal.
+        //
+        // Fraksi potrait/campuran dinaikkan dari 58% -> 78%: di layar yang
+        // sempit-tapi-tinggi (mis. tablet potrait), LEBAR — bukan tinggi —
+        // yang jadi pembatas (heightBasedCardWidth biasanya jauh lebih besar
+        // karena ruang tinggi berlebih), jadi 58% bikin kartu tetap kecil
+        // padahal ruang tinggi masih banyak nganggur. 78% masih nyisain
+        // celah di kiri-kanan buat "peek" kartu sebelah (ciri khas carousel
+        // ini), tapi kartu utamanya jauh lebih besar & lebih dominan.
         val avgAspectRatio = remember(templates) { averageAspectRatio(templates) }
         val isLandscapeSet = avgAspectRatio > 1.05f
         val widthBasedCardWidth = if (isLandscapeSet) {
             (maxWidth * 0.65f).coerceAtLeast(260.dp)
         } else {
-            (maxWidth * 0.58f).coerceIn(190.dp, 260.dp)
+            (maxWidth * 0.78f).coerceAtLeast(190.dp)
         }
 
         // BATAS DARI TINGGI: dari `maxHeight` yang tersedia, sisihkan ruang
@@ -395,123 +423,123 @@ private fun CarouselCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Box(modifier = Modifier.width(cardWidth)) {
-        Column(
-            modifier = Modifier
-                .width(cardWidth)
-                .padding(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Kotak pembungkus thumbnail SEKARANG ikutin rasio ASLI bitmap bingkai
-            // (bukan dipaksa 2:3 lagi) — jadi ContentScale.Fit SELALU mengisi PENUH
-            // kotak tanpa letterbox sama sekali, apapun bentuk bingkainya (potret,
-            // landscape, dll). Konsekuensinya tinggi kartu di carousel jadi bisa
-            // beda-beda antar template (bukan seragam persis), tapi ini trade-off
-            // yang jauh lebih AMAN daripada replikasi manual rumus letterbox
-            // ContentScale.Fit — pendekatan itu gampang meleset dikit (pembulatan,
-            // dsb) dan bikin kotak nomor slot salah ukuran/posisi total, bahkan
-            // bisa sampai tidak kelihatan sama sekali.
-            //
-            // Rasio dihitung dari dimensi BITMAP YANG BENERAN DI-LOAD
-            // (thumbnail.width/height) — bukan dari metadata template.frameWidthPx/
-            // frameHeightPx — supaya persis sama dengan yang Compose pakai buat
-            // nge-render Image-nya (ContentScale apapun selalu pakai intrinsic size
-            // bitmap, bukan metadata manapun).
-            val frameAspectRatio = remember(thumbnail) {
-                if (thumbnail != null && thumbnail.height > 0) {
-                    thumbnail.width.toFloat() / thumbnail.height.toFloat()
-                } else {
-                    2f / 3f
-                }
-            }
-            var thumbnailWidthPx by remember(template.id) { mutableStateOf(0f) }
-            var thumbnailHeightPx by remember(template.id) { mutableStateOf(0f) }
-
-            Box(
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(frameAspectRatio)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        Brush.linearGradient(
-                            listOf(Color(0xFF32363F), Color(0xFF2B2E36))
+                    .width(cardWidth)
+                    .padding(14.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Kotak pembungkus thumbnail SEKARANG ikutin rasio ASLI bitmap bingkai
+                // (bukan dipaksa 2:3 lagi) — jadi ContentScale.Fit SELALU mengisi PENUH
+                // kotak tanpa letterbox sama sekali, apapun bentuk bingkainya (potret,
+                // landscape, dll). Konsekuensinya tinggi kartu di carousel jadi bisa
+                // beda-beda antar template (bukan seragam persis), tapi ini trade-off
+                // yang jauh lebih AMAN daripada replikasi manual rumus letterbox
+                // ContentScale.Fit — pendekatan itu gampang meleset dikit (pembulatan,
+                // dsb) dan bikin kotak nomor slot salah ukuran/posisi total, bahkan
+                // bisa sampai tidak kelihatan sama sekali.
+                //
+                // Rasio dihitung dari dimensi BITMAP YANG BENERAN DI-LOAD
+                // (thumbnail.width/height) — bukan dari metadata template.frameWidthPx/
+                // frameHeightPx — supaya persis sama dengan yang Compose pakai buat
+                // nge-render Image-nya (ContentScale apapun selalu pakai intrinsic size
+                // bitmap, bukan metadata manapun).
+                val frameAspectRatio = remember(thumbnail) {
+                    if (thumbnail != null && thumbnail.height > 0) {
+                        thumbnail.width.toFloat() / thumbnail.height.toFloat()
+                    } else {
+                        2f / 3f
+                    }
+                }
+                var thumbnailWidthPx by remember(template.id) { mutableStateOf(0f) }
+                var thumbnailHeightPx by remember(template.id) { mutableStateOf(0f) }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(frameAspectRatio)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(Color(0xFF32363F), Color(0xFF2B2E36))
+                            )
                         )
-                    )
-                    .onSizeChanged { size ->
-                        thumbnailWidthPx = size.width.toFloat()
-                        thumbnailHeightPx = size.height.toFloat()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                if (thumbnail != null) {
-                    // Layer BAWAH: kotak nomor slot. Karena kotak pembungkus di atas
-                    // udah pas rasio bingkainya, containerWidthPx/HeightPx di sini =
-                    // ukuran gambar yang BENERAN tampil (tidak ada letterbox yang perlu
-                    // dikompensasi lagi). Digambar SEBELUM (di belakang) bingkai supaya
-                    // cuma kelihatan lewat "lubang" transparan slot di PNG bingkai,
-                    // PERSIS seperti hasil akhir foto nanti (lihat
-                    // TemplateSessionManager.buildComposite, urutan layer-nya sama:
-                    // slot/foto dulu, baru bingkai di atasnya).
-                    TemplateSlotOverlay(
-                        slots = template.slots,
-                        containerWidthPx = thumbnailWidthPx,
-                        containerHeightPx = thumbnailHeightPx,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                        .onSizeChanged { size ->
+                            thumbnailWidthPx = size.width.toFloat()
+                            thumbnailHeightPx = size.height.toFloat()
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (thumbnail != null) {
+                        // Layer BAWAH: kotak nomor slot. Karena kotak pembungkus di atas
+                        // udah pas rasio bingkainya, containerWidthPx/HeightPx di sini =
+                        // ukuran gambar yang BENERAN tampil (tidak ada letterbox yang perlu
+                        // dikompensasi lagi). Digambar SEBELUM (di belakang) bingkai supaya
+                        // cuma kelihatan lewat "lubang" transparan slot di PNG bingkai,
+                        // PERSIS seperti hasil akhir foto nanti (lihat
+                        // TemplateSessionManager.buildComposite, urutan layer-nya sama:
+                        // slot/foto dulu, baru bingkai di atasnya).
+                        TemplateSlotOverlay(
+                            slots = template.slots,
+                            containerWidthPx = thumbnailWidthPx,
+                            containerHeightPx = thumbnailHeightPx,
+                            modifier = Modifier.fillMaxSize()
+                        )
 
-                    // Layer ATAS: bingkai PNG asli — bagian yang opaque otomatis
-                    // nutupin kotak nomor di baliknya, cuma bagian transparan
-                    // (lubang slot) yang nampilin warna+nomornya.
-                    Image(
-                        bitmap = thumbnail.asImageBitmap(),
-                        contentDescription = "Thumbnail ${template.name}",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.ImageIcon,
-                        contentDescription = null,
-                        tint = Color(0xFF7E8592)
-                    )
+                        // Layer ATAS: bingkai PNG asli — bagian yang opaque otomatis
+                        // nutupin kotak nomor di baliknya, cuma bagian transparan
+                        // (lubang slot) yang nampilin warna+nomornya.
+                        Image(
+                            bitmap = thumbnail.asImageBitmap(),
+                            contentDescription = "Thumbnail ${template.name}",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.ImageIcon,
+                            contentDescription = null,
+                            tint = Color(0xFF7E8592)
+                        )
+                    }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
-            Text(
-                text = template.name,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFFE4E6EA),
-                maxLines = 1
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = "${template.slotCount} slot foto",
-                style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF9AA0AC)
-            )
-        }
-
-        // Tombol hapus — cuma dirender kalau onDeleteClick disediakan (dari
-        // Settings > Frame List). Tidak mengubah tampilan carousel picker biasa.
-        if (onDeleteClick != null) {
-            androidx.compose.material3.IconButton(
-                onClick = onDeleteClick,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
-                    .size(32.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(Color(0xCC1A1C21))
-            ) {
-                Icon(
-                    imageVector = androidx.compose.material.icons.Icons.Filled.Delete,
-                    contentDescription = "Hapus template ${template.name}",
-                    tint = Color(0xFFEF5350)
+                Text(
+                    text = template.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFE4E6EA),
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${template.slotCount} slot foto",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF9AA0AC)
                 )
             }
-        }
+
+            // Tombol hapus — cuma dirender kalau onDeleteClick disediakan (dari
+            // Settings > Frame List). Tidak mengubah tampilan carousel picker biasa.
+            if (onDeleteClick != null) {
+                androidx.compose.material3.IconButton(
+                    onClick = onDeleteClick,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCC1A1C21))
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Filled.Delete,
+                        contentDescription = "Hapus template ${template.name}",
+                        tint = Color(0xFFEF5350)
+                    )
+                }
+            }
         }
     }
 }
