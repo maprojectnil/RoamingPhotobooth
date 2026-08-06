@@ -27,13 +27,27 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import android.util.Log
+import kotlin.math.min
 
 private const val TAG = "TemplateEditor"
 
+/** Ukuran minimum slot (rasio thd bingkai) — dipakai buat clamp geser & resize. */
+private const val MIN_SIZE_RATIO = 0.05f
+private const val MIN_HALF_SIZE_RATIO = MIN_SIZE_RATIO / 2f
+
 /**
  * Kotak editor untuk 1 slot foto di atas preview bingkai: bisa digeser (drag di badan
- * kotak), diresize (drag di pegangan kanan-bawah), diduplikasi (ikon salin — dipakai
- * saat 1 foto yang sama mau dipasang di beberapa posisi bingkai), dan dihapus (ikon X).
+ * kotak), diresize (drag di pegangan kanan-bawah — pakai metode **Scale from Center**,
+ * jadi titik tengah slot diam & ukuran membesar/mengecil merata ke segala arah),
+ * diduplikasi (ikon salin — dipakai saat 1 foto yang sama mau dipasang di beberapa
+ * posisi bingkai), dan dihapus (ikon X).
+ *
+ * **Smart Snap**: selama digeser/diresize, tepi & titik tengah slot otomatis "nyantol"
+ * (snap) ke garis Center, Thirds, Quarters, atau Edges bingkai kalau jaraknya masih di
+ * dalam threshold (lihat [SmartSnap]). Jenis snap mana yang aktif diatur lewat
+ * [snapSettings] (toggle-nya ada di panel kontrol). Setiap kali ada garis yang kena
+ * snap, [onSnapGuidesChanged] dipanggil supaya workspace bisa gambar garis panduannya;
+ * begitu drag selesai, dipanggil lagi dengan [SnapGuides.NONE] buat hapus garisnya.
  *
  * [isShared] = true kalau ada slot LAIN dengan `order` yang sama (hasil duplikat) —
  * dikasih warna beda supaya user ngeh slot-slot itu bakal keisi 1 foto yang sama.
@@ -44,12 +58,16 @@ fun SlotEditorBox(
     containerWidthPx: Float,
     containerHeightPx: Float,
     isShared: Boolean,
+    snapSettings: SmartSnapSettings,
     onSlotChanged: (PhotoSlot) -> Unit,
     onDuplicateClick: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    onSnapGuidesChanged: (SnapGuides) -> Unit = {}
 ) {
     val density = LocalDensity.current
     val currentSlot = rememberUpdatedState(slot) // <- selalu pegang slot terbaru
+    val currentSnapSettings = rememberUpdatedState(snapSettings) // <- selalu pegang toggle snap terbaru
+    val snapThresholdPx = with(density) { SmartSnap.THRESHOLD_DP.dp.toPx() }
 
     val accentColor = if (isShared) Color(0xFFFF7A59) else Color(0xFF4DD0E1)
 
@@ -77,14 +95,41 @@ fun SlotEditorBox(
 
                 detectDragGestures(
                     onDragStart = { Log.d(TAG, "Drag START slot=${slot.id}") },
-                    onDragEnd = { Log.d(TAG, "Drag END slot=${slot.id}") }
+                    onDragEnd = {
+                        Log.d(TAG, "Drag END slot=${slot.id}")
+                        onSnapGuidesChanged(SnapGuides.NONE)
+                    },
+                    onDragCancel = { onSnapGuidesChanged(SnapGuides.NONE) }
                 ) { change, dragAmount ->
                     change.consume()
                     val dxRatio = dragAmount.x / containerWidthPx
                     val dyRatio = dragAmount.y / containerHeightPx
                     val latest = currentSlot.value
-                    currentXRatio = (currentXRatio + dxRatio).coerceIn(0f, 1f - latest.widthRatio)
-                    currentYRatio = (currentYRatio + dyRatio).coerceIn(0f, 1f - latest.heightRatio)
+
+                    // Posisi mentah (sebelum snap) hasil drag, sudah di-clamp ke dalam bingkai.
+                    val rawX = (currentXRatio + dxRatio).coerceIn(0f, 1f - latest.widthRatio)
+                    val rawY = (currentYRatio + dyRatio).coerceIn(0f, 1f - latest.heightRatio)
+
+                    // Smart Snap: coba tarik tepi kiri/tengah/kanan (X) & atas/tengah/bawah (Y)
+                    // slot ke garis Center/Thirds/Quarters/Edges terdekat sesuai toggle aktif.
+                    val targets = SmartSnap.buildTargets(currentSnapSettings.value)
+                    val (snappedX, hitX) = SmartSnap.snapPosition(
+                        rawX, latest.widthRatio, containerWidthPx, snapThresholdPx, targets
+                    )
+                    val (snappedY, hitY) = SmartSnap.snapPosition(
+                        rawY, latest.heightRatio, containerHeightPx, snapThresholdPx, targets
+                    )
+
+                    currentXRatio = snappedX.coerceIn(0f, 1f - latest.widthRatio)
+                    currentYRatio = snappedY.coerceIn(0f, 1f - latest.heightRatio)
+
+                    onSnapGuidesChanged(
+                        SnapGuides(
+                            vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap(),
+                            horizontal = hitY?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
+                        )
+                    )
+
                     Log.d(TAG, "Drag MOVE slot=${slot.id} newX=$currentXRatio newY=$currentYRatio")
                     // .copy() dari objek TERBARU, hanya timpa x & y
                     onSlotChanged(latest.copy(xRatio = currentXRatio, yRatio = currentYRatio))
@@ -138,7 +183,9 @@ fun SlotEditorBox(
             )
         }
 
-        // Pegangan resize (pojok kanan-bawah)
+        // Pegangan resize (pojok kanan-bawah) — Scale from Center: geser pegangan ini
+        // membesarkan/mengecilkan slot ke SEGALA arah sekaligus dari titik tengahnya,
+        // bukan cuma dari pojok kanan-bawah seperti resize biasa.
         Box(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -146,19 +193,76 @@ fun SlotEditorBox(
                 .clip(RoundedCornerShape(topStart = 8.dp))
                 .background(accentColor)
                 .pointerInput(slot.id) {
-                    var currentWidthRatio = slot.widthRatio
-                    var currentHeightRatio = slot.heightRatio
+                    // Lacak setengah-lebar & setengah-tinggi (jarak pusat -> tepi), karena
+                    // scale-from-center pada dasarnya cuma punya 1 derajat kebebasan per
+                    // sumbu: seberapa jauh tepi dari pusat yang TETAP diam.
+                    var halfWidthRatio = slot.widthRatio / 2f
+                    var halfHeightRatio = slot.heightRatio / 2f
 
-                    detectDragGestures { change, dragAmount ->
+                    // Titik pusat DIHITUNG SEKALI di awal gesture (bukan diturunkan ulang dari
+                    // state ter-recompose tiap event) — sesuai definisi "scale from center":
+                    // pusatnya adalah invarian selama 1 gesture resize berlangsung, jadi jangan
+                    // sampai keikut goyang oleh state yang mungkin belum sempat ke-recompose.
+                    val centerX = slot.xRatio + slot.widthRatio / 2f
+                    val centerY = slot.yRatio + slot.heightRatio / 2f
+                    val maxHalfW = min(centerX, 1f - centerX)
+                    val maxHalfH = min(centerY, 1f - centerY)
+
+                    detectDragGestures(
+                        onDragEnd = { onSnapGuidesChanged(SnapGuides.NONE) },
+                        onDragCancel = { onSnapGuidesChanged(SnapGuides.NONE) }
+                    ) { change, dragAmount ->
                         change.consume()
-                        val dwRatio = dragAmount.x / containerWidthPx
-                        val dhRatio = dragAmount.y / containerHeightPx
                         val latest = currentSlot.value
-                        currentWidthRatio = (currentWidthRatio + dwRatio).coerceIn(0.05f, 1f - latest.xRatio)
-                        currentHeightRatio = (currentHeightRatio + dhRatio).coerceIn(0.05f, 1f - latest.yRatio)
-                        Log.d(TAG, "Resize slot=${slot.id} newW=$currentWidthRatio newH=$currentHeightRatio")
-                        // .copy() dari objek TERBARU, hanya timpa width & height
-                        onSlotChanged(latest.copy(widthRatio = currentWidthRatio, heightRatio = currentHeightRatio))
+
+                        // Pegangan ada di pojok kanan-bawah = titik (centerX+halfW, centerY+halfH).
+                        // Geser pegangan ke kanan/bawah sejauh dx/dy -> setengah-ukuran nambah
+                        // sejauh dx/dy juga (bukan 2x), tapi karena tepi SATU-nya di sisi
+                        // berlawanan ikut gerak simetris, total lebar/tinggi tetap berubah 2x dx/dy.
+                        val rawHalfW = (halfWidthRatio + dragAmount.x / containerWidthPx)
+                            .coerceIn(MIN_HALF_SIZE_RATIO, maxHalfW)
+                        val rawHalfH = (halfHeightRatio + dragAmount.y / containerHeightPx)
+                            .coerceIn(MIN_HALF_SIZE_RATIO, maxHalfH)
+
+                        // Smart Snap: coba tarik tepi kanan (X) & tepi bawah (Y) — yang otomatis
+                        // berarti tepi kiri/atas di sisi berlawanan ikut ke garis simetrisnya,
+                        // karena pusatnya diam — ke garis Center/Thirds/Quarters/Edges terdekat.
+                        val targets = SmartSnap.buildTargets(currentSnapSettings.value)
+                        val (snappedHalfW, hitX) = SmartSnap.snapHalfExtent(
+                            centerX, rawHalfW, containerWidthPx, snapThresholdPx, targets
+                        )
+                        val (snappedHalfH, hitY) = SmartSnap.snapHalfExtent(
+                            centerY, rawHalfH, containerHeightPx, snapThresholdPx, targets
+                        )
+
+                        halfWidthRatio = snappedHalfW.coerceIn(MIN_HALF_SIZE_RATIO, maxHalfW)
+                        halfHeightRatio = snappedHalfH.coerceIn(MIN_HALF_SIZE_RATIO, maxHalfH)
+
+                        onSnapGuidesChanged(
+                            SnapGuides(
+                                vertical = hitX?.let { mapOf(it.ratio to it.type) } ?: emptyMap(),
+                                horizontal = hitY?.let { mapOf(it.ratio to it.type) } ?: emptyMap()
+                            )
+                        )
+
+                        val newWidth = halfWidthRatio * 2f
+                        val newHeight = halfHeightRatio * 2f
+                        val newX = centerX - halfWidthRatio
+                        val newY = centerY - halfHeightRatio
+
+                        Log.d(
+                            TAG,
+                            "Resize(ScaleFromCenter) slot=${slot.id} newW=$newWidth newH=$newHeight " +
+                                    "newX=$newX newY=$newY"
+                        )
+                        onSlotChanged(
+                            latest.copy(
+                                xRatio = newX,
+                                yRatio = newY,
+                                widthRatio = newWidth,
+                                heightRatio = newHeight
+                            )
+                        )
                     }
                 }
         )

@@ -1,5 +1,6 @@
 package com.example.roamingphotobooth.template
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -37,6 +39,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,8 +50,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
@@ -103,6 +109,10 @@ private fun WorkspacePane(
 ) {
     var containerWidthPx by remember { mutableStateOf(0f) }
     var containerHeightPx by remember { mutableStateOf(0f) }
+
+    // Garis panduan Smart Snap yang lagi aktif (diisi SlotEditorBox pas drag/resize
+    // kena snap, dikosongkan lagi begitu gesture selesai) — dirender di atas semua slot.
+    var activeSnapGuides by remember { mutableStateOf(SnapGuides.NONE) }
 
     val frameBitmap = viewModel.frameBitmap.value
 
@@ -197,21 +207,75 @@ private fun WorkspacePane(
                                 containerWidthPx = containerWidthPx,
                                 containerHeightPx = containerHeightPx,
                                 isShared = (orderCounts[slot.order] ?: 0) > 1,
+                                snapSettings = viewModel.snapSettings.value,
                                 onSlotChanged = { updated -> viewModel.updateSlot(index, updated) },
                                 onDuplicateClick = { viewModel.duplicateSlot(index) },
-                                onDeleteClick = { viewModel.removeSlotAt(index) }
+                                onDeleteClick = { viewModel.removeSlotAt(index) },
+                                onSnapGuidesChanged = { guides -> activeSnapGuides = guides }
                             )
                         }
+
+                        // Garis panduan Smart Snap — digambar PALING ATAS supaya kelihatan
+                        // jelas di atas bingkai & slot saat lagi nge-snap.
+                        SnapGuideOverlay(
+                            guides = activeSnapGuides,
+                            containerWidthPx = containerWidthPx,
+                            containerHeightPx = containerHeightPx,
+                            modifier = Modifier.matchParentSize()
+                        )
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "Geser slot untuk memindah • tarik pojok kanan-bawah untuk resize • " +
-                    "ikon salin untuk duplikat slot (1 foto dipakai di beberapa posisi)",
+                text = "Geser slot untuk memindah • tarik pojok kanan-bawah untuk resize dari " +
+                        "tengah (Scale from Center) • ikon salin untuk duplikat slot (1 foto dipakai " +
+                        "di beberapa posisi) • slot otomatis nyantol (Smart Snap) ke garis tengah/" +
+                        "pertiga/perempat/tepi bingkai",
                 style = MaterialTheme.typography.bodySmall,
                 color = Color(0xFF7E8592)
+            )
+        }
+    }
+}
+
+/**
+ * Gambar garis panduan Smart Snap (dashed) di atas workspace, satu garis tegak per
+ * entri di [SnapGuides.vertical] dan satu garis mendatar per entri di
+ * [SnapGuides.horizontal] — warnanya beda-beda sesuai [SnapType] biar user gampang
+ * ngenalin lagi nyantol ke garis jenis apa (Center/Thirds/Quarters/Edges).
+ */
+@Composable
+private fun SnapGuideOverlay(
+    guides: SnapGuides,
+    containerWidthPx: Float,
+    containerHeightPx: Float,
+    modifier: Modifier = Modifier
+) {
+    if (guides.isEmpty) return
+
+    val dashEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f)
+
+    Canvas(modifier = modifier) {
+        guides.vertical.forEach { (ratio, type) ->
+            val x = ratio * containerWidthPx
+            drawLine(
+                color = SmartSnap.colorFor(type),
+                start = Offset(x, 0f),
+                end = Offset(x, containerHeightPx),
+                strokeWidth = 2.5f,
+                pathEffect = dashEffect
+            )
+        }
+        guides.horizontal.forEach { (ratio, type) ->
+            val y = ratio * containerHeightPx
+            drawLine(
+                color = SmartSnap.colorFor(type),
+                start = Offset(0f, y),
+                end = Offset(containerWidthPx, y),
+                strokeWidth = 2.5f,
+                pathEffect = dashEffect
             )
         }
     }
@@ -300,6 +364,45 @@ private fun ControlPanel(
                 }
             }
 
+            Spacer(modifier = Modifier.height(18.dp))
+            HorizontalDivider(color = Color(0xFF3A3F4A))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Smart Snap",
+                style = MaterialTheme.typography.labelLarge,
+                color = Color(0xFFC9CDD6)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Nyalakan/matikan jenis garis snap saat slot digeser/diresize",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF7E8592)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            val snapSettings = viewModel.snapSettings.value
+            SnapToggleRow(
+                type = SnapType.CENTER,
+                checked = snapSettings.centerEnabled,
+                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.CENTER, it) }
+            )
+            SnapToggleRow(
+                type = SnapType.THIRDS,
+                checked = snapSettings.thirdsEnabled,
+                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.THIRDS, it) }
+            )
+            SnapToggleRow(
+                type = SnapType.QUARTERS,
+                checked = snapSettings.quartersEnabled,
+                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.QUARTERS, it) }
+            )
+            SnapToggleRow(
+                type = SnapType.EDGES,
+                checked = snapSettings.edgesEnabled,
+                onCheckedChange = { viewModel.setSnapTypeEnabled(SnapType.EDGES, it) }
+            )
+
             Spacer(modifier = Modifier.height(14.dp))
             Text(
                 text = "Daftar Slot",
@@ -341,6 +444,44 @@ private fun ControlPanel(
                 Text("Simpan Template", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
+}
+
+/** 1 baris toggle untuk 1 jenis Smart Snap — bulatan kecil kiri = warna garis panduannya. */
+@Composable
+private fun SnapToggleRow(
+    type: SnapType,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val guideColor = SmartSnap.colorFor(type)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(guideColor)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = SmartSnap.labelFor(type),
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(0xFFE4E6EA),
+            modifier = Modifier.weight(1f)
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = guideColor,
+                checkedTrackColor = guideColor.copy(alpha = 0.4f)
+            )
+        )
     }
 }
 
