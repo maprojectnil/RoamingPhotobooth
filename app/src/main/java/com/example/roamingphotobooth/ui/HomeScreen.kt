@@ -35,7 +35,14 @@ fun HomeScreen(
     // tetap kompilasi & jalan seperti sebelumnya.
     kioskModeEnabled: Boolean = false,
     onEnableKioskMode: () -> Unit = {},
-    onDisableKioskMode: () -> Unit = {}
+    onDisableKioskMode: () -> Unit = {},
+    // <-- BARU: Developer Mode — tombol logo orang pojok kiri bawah (lihat
+    // DeveloperModeButton). Saat aktif, booth pakai kamera DEPAN perangkat sendiri,
+    // tidak butuh kamera eksternal. Default aman (nonaktif, no-op) sama seperti
+    // Kiosk Mode di atas.
+    developerModeEnabled: Boolean = false,
+    onEnableDeveloperMode: () -> Unit = {},
+    onDisableDeveloperMode: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -68,6 +75,18 @@ fun HomeScreen(
             onDisable = onDisableKioskMode,
             modifier = Modifier
                 .align(Alignment.TopEnd)
+                .padding(16.dp)
+        )
+
+        // Tombol Developer Mode — pojok kiri bawah, opacity rendah, ukuran sama
+        // seperti tombol Kiosk Mode (lihat DeveloperModeButton). Aktifkan saat
+        // booth mau dites/dipakai tanpa kamera eksternal (pakai kamera depan HP).
+        DeveloperModeButton(
+            enabled = developerModeEnabled,
+            onEnable = onEnableDeveloperMode,
+            onDisable = onDisableDeveloperMode,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
                 .padding(16.dp)
         )
 

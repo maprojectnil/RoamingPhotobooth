@@ -17,6 +17,7 @@ import com.extremesolution.esptpcamera.Camera
 import com.extremesolution.esptpcamera.PtpConstants
 import com.extremesolution.esptpcamera.PtpService
 import com.extremesolution.esptpcamera.model.LiveViewData
+import com.example.roamingphotobooth.camera.CameraBackend
 import java.io.ByteArrayOutputStream
 
 /**
@@ -40,7 +41,7 @@ import java.io.ByteArrayOutputStream
  * Dipakai dari 1 Activity (bukan Singleton bebas) — buat & `shutdown()` sesuai
  * lifecycle Activity yang memilikinya.
  */
-class EsCameraSession(private val context: Context) : Camera.CameraListener {
+class EsCameraSession(private val context: Context) : Camera.CameraListener, CameraBackend {
 
     companion object {
         private const val TAG = "EsCameraSession"
@@ -65,22 +66,22 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener {
     private var previousLiveViewData: LiveViewData? = null
 
     /** Kamera siap dipakai (sesi PTP terbuka) — live view otomatis dimulai setelah ini. */
-    var onSessionReady: (() -> Unit)? = null
+    override var onSessionReady: (() -> Unit)? = null
 
     /** Error sesi PTP/USB (device error, permission ditolak, dll). */
-    var onSessionError: ((String) -> Unit)? = null
+    override var onSessionError: ((String) -> Unit)? = null
 
     /** 1 frame live view baru siap ditampilkan. */
-    var onLiveViewFrame: ((Bitmap) -> Unit)? = null
+    override var onLiveViewFrame: ((Bitmap) -> Unit)? = null
 
     /** Foto baru selesai di-retrieve dari kamera, di-encode sebagai JPEG bytes. */
-    var onNewPhotoCaptured: ((ByteArray) -> Unit)? = null
+    override var onNewPhotoCaptured: ((ByteArray) -> Unit)? = null
 
     /** capturePhoto() gagal dikirim, atau hasil retrieve-nya gagal/korup. */
-    var onCaptureFailed: (() -> Unit)? = null
+    override var onCaptureFailed: (() -> Unit)? = null
 
     /** Kamera (fisik) dicabut dari USB. */
-    var onDeviceDetached: (() -> Unit)? = null
+    override var onDeviceDetached: (() -> Unit)? = null
 
     private var isListeningDetach = false
 
@@ -128,7 +129,7 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener {
     }
 
     /** Kirim command jepret ke kamera yang sedang aktif. Return false kalau belum ada kamera. */
-    fun capturePhoto(): Boolean {
+    override fun capturePhoto(): Boolean {
         val cam = camera
         if (cam == null) {
             Log.w(TAG, "capturePhoto() dipanggil tapi belum ada kamera aktif")
@@ -148,7 +149,7 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener {
     }
 
     /** Panggil dari onDestroy Activity supaya BroadcastReceiver tidak bocor. */
-    fun release() {
+    override fun release() {
         closeSession()
         if (isListeningDetach) {
             try {

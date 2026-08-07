@@ -85,7 +85,15 @@ fun MobileBoothScreen(
     onMirrorToggle: (Boolean) -> Unit,
     onBackClick: () -> Unit,
     onContinueClick: () -> Unit,
-    onSettingsClick: () -> Unit
+    onSettingsClick: () -> Unit,
+    // <-- BARU: Developer Mode (kamera depan perangkat, lihat DeveloperModeButton)
+    // tidak punya tombol shutter FISIK terpisah seperti kamera eksternal (Mobile
+    // mode normal jepret lewat tombol fisik kamera, lihat komentar file di atas) --
+    // jadi saat developer mode aktif, tampilkan tombol shutter di layar supaya user
+    // tetap bisa memicu capture. Default false/no-op supaya alur Mobile normal
+    // (kamera eksternal) tidak berubah sama sekali.
+    showDeviceCameraShutter: Boolean = false,
+    onDeviceCameraShutterClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier.fillMaxSize()
@@ -138,6 +146,22 @@ fun MobileBoothScreen(
                         style = MaterialTheme.typography.headlineSmall,
                         color = Color.White
                     )
+                }
+            }
+
+            // Tombol shutter Developer Mode — cuma muncul kalau sumber kameranya
+            // kamera depan perangkat (tidak ada tombol fisik terpisah untuk dipencet
+            // seperti kamera eksternal, lihat komentar showDeviceCameraShutter di atas).
+            if (showDeviceCameraShutter) {
+                androidx.compose.material3.Button(
+                    onClick = onDeviceCameraShutterClick,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 32.dp)
+                        .size(80.dp)
+                ) {
+                    Text(text = "📷", style = MaterialTheme.typography.headlineMedium)
                 }
             }
         }

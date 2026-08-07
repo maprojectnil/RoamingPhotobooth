@@ -95,6 +95,13 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
+
+    // Kamera depan perangkat untuk Developer Mode (lihat DeveloperModeButton di
+    // HomeScreen + DeviceCameraSession) -- alternatif kamera eksternal PTP/USB
+    // (EsCameraSession) supaya booth bisa dites/dipakai tanpa kamera DSLR fisik.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 

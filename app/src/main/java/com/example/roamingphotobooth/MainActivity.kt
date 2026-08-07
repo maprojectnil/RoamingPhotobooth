@@ -1,8 +1,10 @@
 package com.example.roamingphotobooth
 
+import android.Manifest
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -14,6 +16,8 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -25,6 +29,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.example.roamingphotobooth.booth.mobile.MobileBoothScreen
 import com.example.roamingphotobooth.booth.stand.StandBoothScreen
+import com.example.roamingphotobooth.camera.CameraBackend
+import com.example.roamingphotobooth.devicecam.DeviceCameraSession
 import com.example.roamingphotobooth.nav.AppScreen
 import com.example.roamingphotobooth.nav.BoothMode
 import com.example.roamingphotobooth.ptp.EsCameraSession
@@ -42,6 +48,18 @@ class MainActivity : ComponentActivity() {
     // lihat EsCameraSession untuk detail adapter & alasan migrasi dari
     // implementasi native/libusb sebelumnya.
     private lateinit var cameraSession: EsCameraSession
+
+    // Sumber kamera untuk Developer Mode (lihat DeveloperModeButton di HomeScreen) —
+    // kamera DEPAN perangkat, alternatif dari cameraSession (PTP/USB eksternal).
+    // Cuma dibuat begitu Developer Mode diaktifkan pertama kali (lihat
+    // enableDeveloperMode()), makanya lateinit + dicek dulu pakai isInitialized.
+    private lateinit var deviceCameraSession: DeviceCameraSession
+
+    // Referensi sumber kamera yang SEDANG dipakai (cameraSession atau
+    // deviceCameraSession, tergantung developerModeEnabled) -- semua kode yang
+    // butuh trigger capture (mis. standStartCountdownAndCapture) baca lewat sini
+    // supaya tidak perlu tahu implementasi konkretnya (lihat CameraBackend).
+    private lateinit var activeCameraBackend: CameraBackend
 
     private var frameOverlayBitmap = mutableStateOf<Bitmap?>(null)
 
@@ -94,6 +112,12 @@ class MainActivity : ComponentActivity() {
     // (startLockTask) supaya user tidak bisa keluar app lewat Recents/Home; keluar
     // dari Kiosk Mode wajib lewat dialog password di HomeScreen (default "0000").
     private var kioskModeEnabled = mutableStateOf(false)
+
+    // Developer Mode — diaktifkan/nonaktifkan lewat tombol logo orang di HomeScreen
+    // (lihat DeveloperModeButton). Saat aktif, booth pakai kamera DEPAN perangkat
+    // (lihat DeviceCameraSession) alih-alih kamera eksternal PTP/USB (EsCameraSession)
+    // -- berguna untuk testing/pemakaian tanpa kamera DSLR/mirrorless fisik.
+    private var developerModeEnabled = mutableStateOf(false)
 
     // Navigasi layar: Home -> pilih mode (Mobile/Stand) -> layar booth (live view + capture)
     private var currentScreen = mutableStateOf(AppScreen.HOME)
@@ -170,6 +194,20 @@ class MainActivity : ComponentActivity() {
         sessionSettings.value = sessionSettingsStorage.load()
     }
 
+    // Izin CAMERA runtime -- dibutuhkan Developer Mode (kamera depan perangkat via
+    // CameraX, lihat DeviceCameraSession). Manifest sudah punya <uses-permission>
+    // CAMERA, tapi tetap wajib diminta saat runtime di Android 6.0+.
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startDeviceCameraSession()
+        } else {
+            developerModeEnabled.value = false
+            statusText.value = "⚠️ Izin kamera diperlukan untuk mengaktifkan Developer Mode"
+        }
+    }
+
     /**
      * Aktifkan Kiosk Mode: pakai Android Screen Pinning API (startLockTask) supaya
      * user tidak bisa keluar app lewat tombol Home/Recents/notification shade
@@ -199,6 +237,54 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Aktifkan Developer Mode: lepas sesi kamera eksternal (PTP/USB) yang lagi
+     * aktif, lalu mulai kamera DEPAN perangkat lewat DeviceCameraSession (minta
+     * izin CAMERA runtime dulu kalau belum ada -- lihat cameraPermissionLauncher).
+     * Dipanggil dari tombol DeveloperModeButton di HomeScreen.
+     */
+    private fun enableDeveloperMode() {
+        developerModeEnabled.value = true
+        cameraSession.release()
+        liveViewBitmap.value = null
+        statusText.value = "Mengaktifkan Developer Mode (kamera depan perangkat)..."
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startDeviceCameraSession()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startDeviceCameraSession() {
+        deviceCameraSession = DeviceCameraSession(this, this)
+        wireCameraCallbacks(deviceCameraSession)
+        activeCameraBackend = deviceCameraSession
+        deviceCameraSession.start()
+    }
+
+    /**
+     * Nonaktifkan Developer Mode: hentikan kamera depan perangkat, lalu balik
+     * lagi ke kamera eksternal PTP/USB (EsCameraSession) seperti semula --
+     * dibuat ulang dari nol supaya BroadcastReceiver detach & listener PTP
+     * ter-registrasi bersih (sama seperti kondisi awal app baru dibuka).
+     */
+    private fun disableDeveloperMode() {
+        developerModeEnabled.value = false
+        if (::deviceCameraSession.isInitialized) {
+            deviceCameraSession.shutdown()
+        }
+        liveViewBitmap.value = null
+
+        cameraSession = EsCameraSession(this)
+        wireCameraCallbacks(cameraSession)
+        activeCameraBackend = cameraSession
+        cameraSession.initialize(intent)
+        statusText.value = "Menunggu kamera dicolok..."
+    }
+
     private fun updateOrientation() {
         requestedOrientation = when (boothMode.value) {
             BoothMode.STAND -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
@@ -226,7 +312,8 @@ class MainActivity : ComponentActivity() {
         previewBitmap.value = frameOverlayBitmap.value
 
         cameraSession = EsCameraSession(this)
-        wireCameraSessionCallbacks()
+        wireCameraCallbacks(cameraSession)
+        activeCameraBackend = cameraSession
         templateStorage = com.example.roamingphotobooth.template.TemplateStorage(this)
         frameFileManager = com.example.roamingphotobooth.template.FrameFileManager(this)
         appearanceStorage = AppearanceStorage(this)
@@ -248,7 +335,10 @@ class MainActivity : ComponentActivity() {
                         appearance = appearanceSettings.value,
                         kioskModeEnabled = kioskModeEnabled.value,
                         onEnableKioskMode = { enableKioskMode() },
-                        onDisableKioskMode = { disableKioskMode() }
+                        onDisableKioskMode = { disableKioskMode() },
+                        developerModeEnabled = developerModeEnabled.value,
+                        onEnableDeveloperMode = { enableDeveloperMode() },
+                        onDisableDeveloperMode = { disableDeveloperMode() }
                     )
 
                     AppScreen.MODE_SELECT -> ModeSelectScreen(
@@ -280,7 +370,12 @@ class MainActivity : ComponentActivity() {
                                 templatePickerLauncher.launch(
                                     android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
                                 )
-                            }
+                            },
+                            // Developer Mode (kamera depan perangkat) tidak punya tombol
+                            // shutter fisik terpisah seperti kamera eksternal -- tampilkan
+                            // tombol shutter di layar supaya user tetap bisa jepret.
+                            showDeviceCameraShutter = developerModeEnabled.value,
+                            onDeviceCameraShutterClick = { activeCameraBackend.capturePhoto() }
                         )
 
                         BoothMode.STAND -> StandBoothScreen(
@@ -332,31 +427,45 @@ class MainActivity : ComponentActivity() {
         // inilah jalur yang dipakai saat kamera dicolok SAAT app sudah berjalan
         // (activity singleTop menerima ulang lewat sini, bukan onCreate lagi) --
         // intent-nya membawa EXTRA_DEVICE dari filter USB_DEVICE_ATTACHED di manifest.
-        cameraSession.initialize(intent)
+        // Dilewati kalau Developer Mode aktif -- sumber kamera yang dipakai memang
+        // kamera depan perangkat (deviceCameraSession), bukan cameraSession, jadi
+        // tidak boleh ikut nge-render live view/callback PTP di atasnya.
+        if (!developerModeEnabled.value) {
+            cameraSession.initialize(intent)
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraSession.release()
+        if (::deviceCameraSession.isInitialized) {
+            deviceCameraSession.shutdown()
+        }
     }
 
     /**
-     * Pasang semua callback EsCameraSession sekali di awal (bukan per-koneksi
-     * seperti onCameraDeviceReady() versi lama) -- library mengurus sendiri
-     * siklus reconnect/permission tiap kali kamera dicolok ulang.
+     * Pasang semua callback [CameraBackend] sekali per instance sumber kamera --
+     * dipakai baik untuk cameraSession (PTP/USB) maupun deviceCameraSession
+     * (kamera depan perangkat, Developer Mode), karena keduanya implement
+     * kontrak yang sama (lihat CameraBackend). Isi callback-nya SAMA PERSIS
+     * apapun sumbernya -- MainActivity tidak perlu tahu bedanya lagi setelah ini.
      */
-    private fun wireCameraSessionCallbacks() {
-        cameraSession.onSessionReady = {
+    private fun wireCameraCallbacks(backend: CameraBackend) {
+        backend.onSessionReady = {
             runOnUiThread {
-                statusText.value = "✅ Sesi PTP terbuka!\nMemulai live view..."
+                statusText.value = if (developerModeEnabled.value) {
+                    "✅ Developer Mode aktif — kamera depan perangkat siap!"
+                } else {
+                    "✅ Sesi PTP terbuka!\nMemulai live view..."
+                }
             }
         }
 
-        cameraSession.onLiveViewFrame = { bitmap ->
+        backend.onLiveViewFrame = { bitmap ->
             liveViewBitmap.value = bitmap
         }
 
-        cameraSession.onSessionError = { error ->
+        backend.onSessionError = { error ->
             runOnUiThread {
                 statusText.value = "❌ Error: $error"
             }
@@ -366,7 +475,7 @@ class MainActivity : ComponentActivity() {
         // tidak akan pernah ada foto baru yang datang lewat onNewPhotoCaptured,
         // jadi reset di sini supaya tombol shutter tidak nyangkut disabled dan
         // user tinggal tap ulang, bukan cabut-pasang kabel kamera.
-        cameraSession.onCaptureFailed = {
+        backend.onCaptureFailed = {
             runOnUiThread {
                 standIsCapturing.value = false
                 pendingStandCaptureCallback = null
@@ -374,11 +483,11 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        cameraSession.onDeviceDetached = {
+        backend.onDeviceDetached = {
             runOnUiThread { statusText.value = "Kamera terputus. Menunggu kamera dicolok..." }
         }
 
-        cameraSession.onNewPhotoCaptured = merge@{ photoBytes ->
+        backend.onNewPhotoCaptured = merge@{ photoBytes ->
             // MOBILE + lagi nampilin layar hasil akhir (sesi sebelumnya sudah kelar,
             // nunggu user "Lanjut"): jepretan baru dari kamera fisik di-anggap SINYAL
             // "mulai sesi baru" doang, bukan foto pertama sesi berikutnya — jadi foto
@@ -578,7 +687,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            if (!cameraSession.capturePhoto()) {
+            if (!activeCameraBackend.capturePhoto()) {
                 runOnUiThread {
                     statusText.value = "⚠️ Kamera belum terkoneksi"
                     standIsCapturing.value = false
