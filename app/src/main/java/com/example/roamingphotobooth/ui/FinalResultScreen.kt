@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.QrCode2
@@ -70,6 +71,19 @@ import com.example.roamingphotobooth.print.PrintServerRepository
 
 
 /**
+ * <-- BARU: menentukan arti tombol utama (ikon panah) di FinalResultScreen.
+ * - [SESSION_END] (default, dipakai MobileBoothScreen/StandBoothScreen begitu
+ *   sesi photobooth baru selesai): panah MAJU ("Lanjut") -> mulai sesi baru.
+ * - [GALLERY_RECALL] (dipakai gallery.GalleryScreen lewat MainActivity.galleryOpenEntry
+ *   saat user buka lagi 1 entri riwayat dari Galeri): panah KEMBALI ->
+ *   balik ke daftar Galeri, BUKAN mulai sesi baru (tidak relevan karena tidak
+ *   sedang di tengah sesi photobooth). Tombol QR & Print tetap sama persis
+ *   perilakunya di kedua mode -- QR di-regenerate dari landingUrl yang
+ *   tersimpan, Print kirim ulang bitmap resolusi penuh yang sama.
+ */
+enum class FinalResultMode { SESSION_END, GALLERY_RECALL }
+
+/**
  * Layar penuh yang muncul setelah SEMUA slot foto terisi: nampilin hasil akhir
  * + tombol ikon buat lihat QR (scan/download foto dari Drive), lanjut ke sesi
  * baru, dan test print. Dipakai bareng oleh MobileBoothScreen dan
@@ -81,13 +95,22 @@ import com.example.roamingphotobooth.print.PrintServerRepository
  * kegedean dan konsisten baik di portrait maupun landscape. QR-nya sendiri
  * dipindah jadi popup beranimasi (fade + scale) yang muncul saat tombol QR
  * ditekan, bukan ditampilkan permanen di layar.
+ *
+ * <-- BARU: layar ini sekarang JUGA dipakai fitur Galeri (recall foto lama)
+ * lewat [mode] = [FinalResultMode.GALLERY_RECALL] -- lihat GalleryScreen.kt.
+ * Satu-satunya beda tampilan antara kedua mode ada di tombol ikon panah
+ * (lihat [FinalResultMode]); tombol QR & Print (termasuk semua logicnya)
+ * dipakai APA ADANYA tanpa perubahan sama sekali.
  */
 @Composable
 fun FinalResultScreen(
     resultBitmap: Bitmap,
     qrCodeBitmap: Bitmap?,
-    onContinueClick: () -> Unit
+    onContinueClick: () -> Unit,
+    mode: FinalResultMode = FinalResultMode.SESSION_END
 ) {
+    val primaryIcon = if (mode == FinalResultMode.GALLERY_RECALL) Icons.Filled.ArrowBack else Icons.Filled.ArrowForward
+    val primaryDescription = if (mode == FinalResultMode.GALLERY_RECALL) "Kembali ke Galeri" else "Lanjut (Sesi Baru)"
     // BoxWithConstraints supaya tahu perbandingan lebar vs tinggi area yang
     // tersedia (pola yang sama dipakai di MobileBoothScreen/TemplateListScreen)
     // — dari situ kita tentukan lagi landscape atau bukan, tanpa bergantung ke
@@ -142,8 +165,8 @@ fun FinalResultScreen(
                     )
 
                     CircleIconButton(
-                        icon = Icons.Filled.ArrowForward,
-                        contentDescription = "Lanjut (Sesi Baru)",
+                        icon = primaryIcon,
+                        contentDescription = primaryDescription,
                         size = buttonSize,
                         onClick = onContinueClick
                     )
@@ -186,8 +209,8 @@ fun FinalResultScreen(
                     )
 
                     CircleIconButton(
-                        icon = Icons.Filled.ArrowForward,
-                        contentDescription = "Lanjut (Sesi Baru)",
+                        icon = primaryIcon,
+                        contentDescription = primaryDescription,
                         size = buttonSize,
                         onClick = onContinueClick
                     )

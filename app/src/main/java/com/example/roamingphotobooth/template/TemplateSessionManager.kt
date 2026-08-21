@@ -33,6 +33,14 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
     val filledSlots: Int get() = capturedPhotos.size
     val isComplete: Boolean get() = filledSlots >= totalSlots
 
+    // <-- BARU: dipakai fitur Retake mode MOBILE (lihat MobileBoothScreen +
+    // MainActivity.mobileRetakeLastPhoto). Mobile tidak punya layar review
+    // seperti Stand (foto langsung ke-commit ke slot begitu jepret) — jadi
+    // "retake" di sini berarti "buang foto slot TERAKHIR yang sudah masuk,
+    // biar user bisa jepret ulang buat slot itu". True kalau ada minimal 1
+    // slot yang bisa dibatalkan.
+    val canRetakeLastPhoto: Boolean get() = capturedPhotos.isNotEmpty()
+
     /**
      * Slot mana yang harus diisi SELANJUTNYA (urutan 1, 2, 3, ...).
      * Return null kalau semua slot sudah terisi.
@@ -92,6 +100,24 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
     fun reset() {
         capturedPhotos.values.forEach { it.recycle() }
         capturedPhotos.clear()
+    }
+
+    /**
+     * <-- BARU: buang foto di slot dengan `order` PALING BESAR yang sudah terisi
+     * (== slot yang paling terakhir di-capture, karena alur pengisian selalu
+     * berurutan lewat [nextSlotOrder]). Dipakai untuk fitur Retake mode MOBILE:
+     * begitu dipanggil, [nextSlotOrder] otomatis balik nunjuk ke slot itu lagi,
+     * jadi jepretan fisik berikutnya masuk ke slot yang sama (retake), bukan
+     * lanjut ke slot baru.
+     *
+     * Return `true` kalau ada foto yang dibuang, `false` kalau belum ada foto
+     * sama sekali (tidak ada yang bisa di-retake).
+     */
+    fun removeLastPhoto(): Boolean {
+        val lastOrder = capturedPhotos.keys.maxOrNull() ?: return false
+        capturedPhotos.remove(lastOrder)?.recycle()
+        Log.i(TAG, "Foto slot $lastOrder dibuang (retake). Progress: $filledSlots/$totalSlots")
+        return true
     }
 
     /**

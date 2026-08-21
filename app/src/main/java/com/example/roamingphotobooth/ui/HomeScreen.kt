@@ -4,8 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -42,7 +45,11 @@ fun HomeScreen(
     // Kiosk Mode di atas.
     developerModeEnabled: Boolean = false,
     onEnableDeveloperMode: () -> Unit = {},
-    onDisableDeveloperMode: () -> Unit = {}
+    onDisableDeveloperMode: () -> Unit = {},
+    // <-- BARU: Galeri — riwayat sesi foto yang sudah selesai (recall print & QR
+    // lama, lihat gallery.GalleryScreen). Tombol pojok kanan bawah, default no-op
+    // supaya pemanggil lama yang belum diupdate tetap kompilasi.
+    onGalleryClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier
@@ -89,6 +96,21 @@ fun HomeScreen(
                 .align(Alignment.BottomStart)
                 .padding(16.dp)
         )
+
+        // Tombol Galeri — pojok kanan bawah, buka riwayat sesi foto yang sudah
+        // selesai (recall print/QR lama tanpa perlu mulai sesi baru).
+        IconButton(
+            onClick = onGalleryClick,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.PhotoLibrary,
+                contentDescription = "Galeri",
+                tint = Color.White
+            )
+        }
 
         // Tombol Mulai — tengah layar
         Button(

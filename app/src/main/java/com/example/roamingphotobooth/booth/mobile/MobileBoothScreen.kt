@@ -86,6 +86,13 @@ fun MobileBoothScreen(
     onBackClick: () -> Unit,
     onContinueClick: () -> Unit,
     onSettingsClick: () -> Unit,
+    // <-- BARU: fitur Retake mode Mobile. Mobile tidak punya layar review kayak
+    // Stand (foto langsung commit ke slot begitu jepret lewat tombol fisik),
+    // jadi tombol ini yang mengizinkan user buang foto SLOT TERAKHIR yang sudah
+    // masuk supaya bisa jepret ulang untuk slot itu. Cuma tampil kalau minimal
+    // 1 slot sudah terisi & sesi belum selesai (lihat canRetake).
+    canRetake: Boolean = false,
+    onRetakeClick: () -> Unit = {},
     // <-- BARU: Developer Mode (kamera depan perangkat, lihat DeveloperModeButton)
     // tidak punya tombol shutter FISIK terpisah seperti kamera eksternal (Mobile
     // mode normal jepret lewat tombol fisik kamera, lihat komentar file di atas) --
@@ -134,6 +141,16 @@ fun MobileBoothScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
+                // Tombol Retake — cuma tampil kalau ada foto slot terakhir yang bisa
+                // dibuang (lihat canRetake / TemplateSessionManager.canRetakeLastPhoto).
+                if (canRetake) {
+                    IconButton(onClick = onRetakeClick) {
+                        Text(
+                            text = "🔄",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+                    }
+                }
                 IconButton(onClick = onSettingsClick) {
                     Text(
                         text = "⚙️",

@@ -22,6 +22,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -81,6 +88,18 @@ class MainActivity : ComponentActivity() {
     // (FinalResultScreen) begitu upload ke Drive selesai. Null selama upload masih
     // jalan di background (layar nampilin status "menyiapkan QR" sampai ini terisi).
     private var qrCodeBitmap = mutableStateOf<Bitmap?>(null)
+
+    // <-- BARU: fitur Galeri — riwayat LOKAL sesi foto yang sudah selesai (lihat
+    // package .gallery). galleryEntries di-refresh dari galleryRepository setiap
+    // kali user membuka AppScreen.GALLERY (bukan realtime -- cukup, karena entri
+    // baru cuma ditambah begitu 1 sesi selesai & user balik ke Home dulu sebelum
+    // buka Galeri lagi). selectedGalleryEntry non-null berarti user lagi di layar
+    // detail (recall) 1 entri tertentu -- lihat galleryOpenEntry()/galleryBack().
+    private lateinit var galleryRepository: com.example.roamingphotobooth.gallery.GalleryRepository
+    private var galleryEntries = mutableStateOf<List<com.example.roamingphotobooth.gallery.GallerySessionEntry>>(emptyList())
+    private var selectedGalleryEntry = mutableStateOf<com.example.roamingphotobooth.gallery.GallerySessionEntry?>(null)
+    private var galleryDetailBitmap = mutableStateOf<Bitmap?>(null)
+    private var galleryDetailQr = mutableStateOf<Bitmap?>(null)
 
     private var activeTemplate = mutableStateOf<com.example.roamingphotobooth.template.PhotoTemplate?>(null)
     private var templateSession: com.example.roamingphotobooth.template.TemplateSessionManager? = null
@@ -321,6 +340,7 @@ class MainActivity : ComponentActivity() {
         sessionSettingsStorage = com.example.roamingphotobooth.settings.SessionSettingsStorage(this)
         sessionSettings.value = sessionSettingsStorage.load()
         sessionMirrorEnabled.value = sessionSettings.value.mirrorCamera
+        galleryRepository = com.example.roamingphotobooth.gallery.GalleryRepository(this)
 
         setContent {
             RoamingPhotoboothTheme {
@@ -338,7 +358,8 @@ class MainActivity : ComponentActivity() {
                         onDisableKioskMode = { disableKioskMode() },
                         developerModeEnabled = developerModeEnabled.value,
                         onEnableDeveloperMode = { enableDeveloperMode() },
-                        onDisableDeveloperMode = { disableDeveloperMode() }
+                        onDisableDeveloperMode = { disableDeveloperMode() },
+                        onGalleryClick = { openGallery() }
                     )
 
                     AppScreen.MODE_SELECT -> ModeSelectScreen(
@@ -371,6 +392,9 @@ class MainActivity : ComponentActivity() {
                                     android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
                                 )
                             },
+                            // <-- BARU: fitur Retake mode Mobile — lihat mobileRetakeLastPhoto().
+                            canRetake = templateSession?.canRetakeLastPhoto == true,
+                            onRetakeClick = { mobileRetakeLastPhoto() },
                             // Developer Mode (kamera depan perangkat) tidak punya tombol
                             // shutter fisik terpisah seperti kamera eksternal -- tampilkan
                             // tombol shutter di layar supaya user tetap bisa jepret.
@@ -408,6 +432,42 @@ class MainActivity : ComponentActivity() {
                             onBackClick = { currentScreen.value = AppScreen.HOME },
                             appearance = appearanceSettings.value
                         )
+                    }
+
+                    // <-- BARU: Galeri — riwayat sesi foto yang sudah selesai.
+                    // selectedGalleryEntry null -> tampilkan daftar (grid thumbnail);
+                    // non-null -> tampilkan detail 1 entri (FinalResultScreen dipakai
+                    // ulang dalam mode GALLERY_RECALL, lihat galleryOpenEntry()).
+                    // Sementara bitmap full-res-nya masih di-decode di background
+                    // (galleryDetailBitmap.value == null), tampilkan indikator loading
+                    // supaya FinalResultScreen (yang butuh Bitmap non-null) tidak perlu
+                    // dipanggil sebelum siap.
+                    AppScreen.GALLERY -> {
+                        val entry = selectedGalleryEntry.value
+                        val detailBitmap = galleryDetailBitmap.value
+                        when {
+                            entry == null -> com.example.roamingphotobooth.gallery.GalleryScreen(
+                                entries = galleryEntries.value,
+                                onEntryClick = { galleryOpenEntry(it) },
+                                onBackClick = { currentScreen.value = AppScreen.HOME }
+                            )
+
+                            detailBitmap == null -> Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(ComposeColor.Black),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = ComposeColor.White)
+                            }
+
+                            else -> com.example.roamingphotobooth.ui.FinalResultScreen(
+                                resultBitmap = detailBitmap,
+                                qrCodeBitmap = galleryDetailQr.value,
+                                onContinueClick = { galleryCloseEntry() },
+                                mode = com.example.roamingphotobooth.ui.FinalResultMode.GALLERY_RECALL
+                            )
+                        }
                     }
                 }
             }
@@ -647,6 +707,70 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * Dipanggil dari tombol Galeri di HomeScreen: baca ulang riwayat dari
+     * [galleryRepository] (bisa saja ada entri baru sejak terakhir dibuka --
+     * mis. sesi photobooth baru saja selesai) lalu pindah ke AppScreen.GALLERY
+     * dalam kondisi daftar (bukan detail -- selectedGalleryEntry dipastikan
+     * null di sini, jaga-jaga kalau sebelumnya sempat tertinggal terisi).
+     */
+    private fun openGallery() {
+        selectedGalleryEntry.value = null
+        galleryDetailBitmap.value = null
+        galleryDetailQr.value = null
+        galleryEntries.value = galleryRepository.getAll()
+        currentScreen.value = AppScreen.GALLERY
+    }
+
+    /**
+     * Dipanggil dari GalleryScreen saat user tap 1 entri riwayat: masuk ke
+     * layar detail (FinalResultScreen mode GALLERY_RECALL). Bitmap resolusi
+     * PENUH & QR di-generate ulang di background thread (bukan di UI thread,
+     * sama seperti alasan yang sama di standAcceptPhoto()) karena decode JPEG
+     * resolusi kamera + encode QR bisa berat -- galleryDetailBitmap tetap null
+     * sementara proses ini jalan supaya UI nampilin loading spinner dulu
+     * (lihat routing AppScreen.GALLERY di setContent).
+     */
+    private fun galleryOpenEntry(entry: com.example.roamingphotobooth.gallery.GallerySessionEntry) {
+        selectedGalleryEntry.value = entry
+        galleryDetailBitmap.value = null
+        galleryDetailQr.value = null
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            val bitmap = try {
+                val uri = android.net.Uri.parse(entry.mediaUri)
+                contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "Gagal load foto galeri (${entry.fileName}): ${e.message}")
+                null
+            }
+            val qr = com.example.roamingphotobooth.util.QrCodeGenerator.generate(entry.landingUrl)
+
+            withContext(Dispatchers.Main) {
+                // Kalau user sudah keburu tap "Kembali" sebelum decode ini selesai
+                // (selectedGalleryEntry sudah null lagi / pindah ke entri lain),
+                // JANGAN timpa state -- bitmap ini sudah tidak relevan lagi.
+                if (selectedGalleryEntry.value?.slug != entry.slug) return@withContext
+                if (bitmap == null) {
+                    statusText.value = "⚠️ Foto tidak ditemukan (mungkin sudah dihapus dari galeri HP)"
+                    selectedGalleryEntry.value = null
+                    return@withContext
+                }
+                galleryDetailBitmap.value = bitmap
+                galleryDetailQr.value = qr
+            }
+        }
+    }
+
+    /** Dipanggil dari tombol panah "Kembali ke Galeri" di layar detail: balik ke daftar. */
+    private fun galleryCloseEntry() {
+        selectedGalleryEntry.value = null
+        galleryDetailBitmap.value = null
+        galleryDetailQr.value = null
+    }
+
+    /**
      * Dipanggil dari tombol shutter di layar (mode Stand): jalanin countdown
      * 3-2-1 di UI, lalu kirim command capture ke kamera lewat EsCameraSession,
      * dan nunggu foto masuk lewat pendingStandCaptureCallback (di-invoke dari
@@ -708,6 +832,28 @@ class MainActivity : ComponentActivity() {
                 pendingStandCaptureCallback = null
                 statusText.value = "⚠️ Foto tidak terdeteksi, coba lagi"
             }
+        }
+    }
+
+    /**
+     * <-- BARU: tombol Retake di Mobile Preview (lihat MobileBoothScreen.canRetake /
+     * onRetakeClick). Beda dari standRetakePhoto (yang buang foto di layar REVIEW
+     * sebelum sempat commit), di Mobile foto SUDAH ke-commit ke slot begitu jepret
+     * (tidak ada layar review) — jadi di sini kita buang foto slot TERAKHIR yang
+     * sudah masuk lewat TemplateSessionManager.removeLastPhoto(), lalu refresh
+     * preview supaya slot itu balik kosong dan siap dijepret ulang lewat tombol
+     * fisik kamera (nextSlotOrder otomatis balik nunjuk slot yang sama).
+     *
+     * Tidak berlaku saat layar hasil akhir (finalResultBitmap != null) sedang
+     * tampil -- di situ jepretan fisik baru sudah dianggap sinyal "sesi baru"
+     * (lihat onNewPhotoCaptured), jadi retake tidak relevan lagi di titik itu.
+     */
+    private fun mobileRetakeLastPhoto() {
+        if (finalResultBitmap.value != null) return
+        val session = templateSession ?: return
+        if (session.removeLastPhoto()) {
+            refreshPreview()
+            statusText.value = "🔄 Foto terakhir dibuang — jepret ulang untuk slot ${session.filledSlots + 1}"
         }
     }
 
@@ -836,6 +982,23 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             qrCodeBitmap.value = qr
             statusText.value = "✅ Tersimpan: $fileName — mengunggah ke Drive di latar belakang..."
+        }
+
+        // <-- BARU: catat sesi ini ke riwayat Galeri (lihat gallery.GalleryRepository)
+        // supaya bisa di-"recall" nanti dari HomeScreen > Galeri -- lihat print ulang
+        // & tampilkan lagi QR-nya tanpa perlu upload/jepret ulang. Cuma dicatat kalau
+        // insert ke MediaStore di atas berhasil (uri != null) -- kalau gagal, tidak
+        // ada apa pun buat di-recall nanti karena file JPEG permanennya tidak ada.
+        if (uri != null) {
+            galleryRepository.addEntry(
+                com.example.roamingphotobooth.gallery.GallerySessionEntry(
+                    slug = slug,
+                    fileName = fileName,
+                    mediaUri = uri.toString(),
+                    landingUrl = landingUrl,
+                    createdAtMillis = System.currentTimeMillis()
+                )
+            )
         }
 
         // Simpan JPEG ke cache privat app (bukan cuma MediaStore) supaya WorkManager
