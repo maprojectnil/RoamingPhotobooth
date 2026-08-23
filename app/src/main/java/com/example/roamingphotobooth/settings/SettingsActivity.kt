@@ -44,10 +44,14 @@ import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
  *    dipakai apa adanya, cuma dipindah ke sini dari alur lama
  *    (EXTRA_START_IN_EDITOR di TemplateEditorActivity).
  *  - Frame List: TemplateListScreen yang SUDAH ADA, dipanggil dengan
- *    `onDeleteTemplate` terisi supaya muncul tombol hapus — TIDAK ada
+ *    `onDeleteTemplate` terisi supaya muncul tombol hapus, dan `onToggleHidden`
+ *    terisi supaya muncul tombol ikon mata (hide/unhide) — TIDAK ada
  *    perubahan pada fungsi/tampilan TemplateListScreen itu sendiri untuk
  *    pemanggil lain (lihat komentar di file itu). Tap kartu (bukan tombol
- *    hapus) membuka template tsb di Frame Editor untuk diedit.
+ *    hapus/mata) membuka template tsb di Frame Editor untuk diedit. Template
+ *    yang di-hide TETAP tampil di sini (redup + badge "Disembunyikan") supaya
+ *    bisa di-unhide lagi, tapi TIDAK tampil di picker bingkai saat sesi booth
+ *    dimulai (TemplateEditorActivity menyaringnya, lihat file itu).
  *  - Appearance: layar baru untuk ubah background Home/Mode Select,
  *    warna tombol & aksen, dan teks tombol — lihat [AppearanceScreen].
  *  - Printer: <-- BARU: cari & pilih Print Server (mDNS) — lihat
@@ -161,6 +165,14 @@ class SettingsActivity : ComponentActivity() {
                         onDeleteTemplate = { template ->
                             frameFileManager.deleteFrameFile(template.framePngPath)
                             templateStorage.deleteTemplate(template.id)
+                            templates = templateStorage.loadAllTemplates()
+                        },
+                        // Toggle hide/unhide: simpan ulang template yang sama
+                        // (ID tetap) dengan `isHidden` dibalik, lalu reload
+                        // daftar supaya carousel & badge "Disembunyikan"
+                        // langsung ter-update.
+                        onToggleHidden = { template ->
+                            templateStorage.saveTemplate(template.copy(isHidden = !template.isHidden))
                             templates = templateStorage.loadAllTemplates()
                         }
                     )

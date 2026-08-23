@@ -34,7 +34,14 @@ data class PhotoTemplate(
     val frameWidthPx: Int,          // ukuran asli bingkai PNG (buat referensi rasio)
     val frameHeightPx: Int,
     val slots: List<PhotoSlot>,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    // Kalau true, template ini disembunyikan dari carousel pemilihan bingkai
+    // saat sesi booth dimulai (TemplateEditorActivity) — TAPI tetap muncul
+    // (dengan penanda visual redup + ikon mata tercoret) di Settings > Frame
+    // List supaya masih bisa di-unhide atau diedit. Default false supaya
+    // template lama (JSON tanpa field ini) otomatis dianggap tidak hidden —
+    // aman berkat `ignoreUnknownKeys` di TemplateStorage.
+    val isHidden: Boolean = false
 ) {
     val slotCount: Int get() = slots.size
 }

@@ -28,6 +28,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -121,7 +123,18 @@ fun TemplateListScreen(
     // Hanya layar Settings > Frame List yang mengisi ini untuk menambah
     // fungsi hapus, tanpa mengubah fungsi/tampilan TemplateListScreen di
     // tempat lain.
-    onDeleteTemplate: ((PhotoTemplate) -> Unit)? = null
+    onDeleteTemplate: ((PhotoTemplate) -> Unit)? = null,
+    // Sama seperti onDeleteTemplate: opsional & default null. Hanya diisi
+    // dari Settings > Frame List supaya muncul tombol ikon mata (hide/unhide)
+    // di tiap kartu. Kalau null, tidak ada tombol mata sama sekali — jadi
+    // carousel picker biasa (pemilihan bingkai saat sesi booth dimulai)
+    // tampilannya tidak berubah. Pemanggil bertanggung jawab menyaring
+    // template ber-`isHidden = true` SEBELUM dikirim ke `templates` di sini
+    // kalau memang tidak ingin template tsb muncul sama sekali (mis. picker
+    // sesi booth) — TemplateListScreen sendiri TIDAK melakukan filter apapun
+    // berdasarkan isHidden, supaya di Settings > Frame List semua template
+    // (termasuk yang hidden) tetap kelihatan untuk bisa di-unhide.
+    onToggleHidden: ((PhotoTemplate) -> Unit)? = null
 ) {
     var selectedFilter by remember { mutableStateOf(OrientationFilter.ALL) }
 
@@ -190,6 +203,7 @@ fun TemplateListScreen(
                 frameFileManager = frameFileManager,
                 onTemplateSelected = onTemplateSelected,
                 onDeleteTemplate = onDeleteTemplate,
+                onToggleHidden = onToggleHidden,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -254,6 +268,7 @@ private fun TemplateCarousel(
     frameFileManager: FrameFileManager,
     onTemplateSelected: (PhotoTemplate) -> Unit,
     onDeleteTemplate: ((PhotoTemplate) -> Unit)? = null,
+    onToggleHidden: ((PhotoTemplate) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -367,7 +382,8 @@ private fun TemplateCarousel(
                     cardWidth = cardWidth,
                     viewportWidthPx = viewportWidthPx,
                     onClick = { onTemplateSelected(template) },
-                    onDeleteClick = onDeleteTemplate?.let { callback -> { callback(template) } }
+                    onDeleteClick = onDeleteTemplate?.let { callback -> { callback(template) } },
+                    onToggleHiddenClick = onToggleHidden?.let { callback -> { callback(template) } }
                 )
             }
         }
@@ -384,11 +400,21 @@ private fun CarouselCard(
     // Non-null HANYA saat dipanggil dari Settings > Frame List — lihat catatan
     // di TemplateListScreen di atas. Kalau null, tidak ada tombol hapus sama
     // sekali, jadi tampilan carousel di alur pilih-template (booth) tidak berubah.
-    onDeleteClick: (() -> Unit)? = null
+    onDeleteClick: (() -> Unit)? = null,
+    // Non-null HANYA di Settings > Frame List. Menampilkan tombol ikon mata
+    // (Visibility/VisibilityOff) di kartu untuk toggle hide/unhide template.
+    onToggleHiddenClick: (() -> Unit)? = null
 ) {
     val thumbnail = remember(template.framePngPath) {
         frameFileManager.loadBitmap(template.framePngPath)
     }
+    // Kartu yang di-hide dibuat redup (bukan disembunyikan total) supaya user
+    // yang lagi di Settings > Frame List tetap bisa lihat & tap tombol mata
+    // buat unhide-nya lagi. Hanya berlaku kalau onToggleHiddenClick disediakan
+    // (yaitu di Settings) — di picker sesi booth, template hidden sudah
+    // difilter SEBELUM sampai ke TemplateListScreen (lihat TemplateEditorActivity),
+    // jadi flag ini tidak pernah relevan di situ.
+    val isDimmed = template.isHidden && onToggleHiddenClick != null
 
     // distanceFraction: 0f = pas di tengah viewport, 1f = sejauh setengah layar,
     // bisa lebih dari 1f kalau kartu ada di luar layar sepenuhnya.
@@ -411,7 +437,11 @@ private fun CarouselCard(
                 // transparan sampai minimum 0.35f, dan sedikit turun (translationY)
                 // supaya terkesan "mundur ke belakang" (depth), bukan cuma pipih.
                 val scale = 1f - (distanceFraction * 0.28f).coerceIn(0f, 0.28f)
-                val alpha = 1f - (distanceFraction * 0.65f).coerceIn(0f, 0.65f)
+                val baseAlpha = 1f - (distanceFraction * 0.65f).coerceIn(0f, 0.65f)
+                // Kartu hidden dikalikan lagi supaya jelas lebih redup dibanding
+                // kartu biasa manapun posisinya di carousel (termasuk saat lagi
+                // pas di tengah, dimana baseAlpha = 1f).
+                val alpha = if (isDimmed) baseAlpha * 0.45f else baseAlpha
                 scaleX = scale
                 scaleY = scale
                 this.alpha = alpha
@@ -521,22 +551,78 @@ private fun CarouselCard(
                 )
             }
 
-            // Tombol hapus — cuma dirender kalau onDeleteClick disediakan (dari
-            // Settings > Frame List). Tidak mengubah tampilan carousel picker biasa.
-            if (onDeleteClick != null) {
-                androidx.compose.material3.IconButton(
-                    onClick = onDeleteClick,
+            // Tombol hapus & tombol mata (hide/unhide) — cuma dirender kalau
+            // callback masing-masing disediakan (dari Settings > Frame List).
+            // Tidak mengubah tampilan carousel picker biasa sama sekali.
+            // Diletakkan berdampingan dalam satu Row di pojok kanan-atas kartu:
+            // mata di kiri, hapus di kanan (paling mepet sudut, konsisten
+            // dengan posisi tombol hapus sebelumnya).
+            if (onDeleteClick != null || onToggleHiddenClick != null) {
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .size(32.dp)
+                        .padding(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (onToggleHiddenClick != null) {
+                        androidx.compose.material3.IconButton(
+                            onClick = onToggleHiddenClick,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0xCC1A1C21))
+                        ) {
+                            Icon(
+                                imageVector = if (template.isHidden) {
+                                    Icons.Filled.VisibilityOff
+                                } else {
+                                    Icons.Filled.Visibility
+                                },
+                                contentDescription = if (template.isHidden) {
+                                    "Tampilkan lagi template ${template.name} di pemilihan bingkai"
+                                } else {
+                                    "Sembunyikan template ${template.name} dari pemilihan bingkai"
+                                },
+                                tint = if (template.isHidden) Color(0xFF7E8592) else Color(0xFF4DD0E1)
+                            )
+                        }
+                    }
+
+                    if (onDeleteClick != null) {
+                        androidx.compose.material3.IconButton(
+                            onClick = onDeleteClick,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0xCC1A1C21))
+                        ) {
+                            Icon(
+                                imageVector = androidx.compose.material.icons.Icons.Filled.Delete,
+                                contentDescription = "Hapus template ${template.name}",
+                                tint = Color(0xFFEF5350)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Badge kecil "Disembunyikan" di pojok kiri-atas supaya status hidden
+            // jelas kelihatan tanpa harus menebak dari warna redup kartu saja
+            // (terutama saat kartu sedang di tengah carousel & scale-nya besar).
+            if (isDimmed) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
                         .clip(RoundedCornerShape(50))
                         .background(Color(0xCC1A1C21))
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Filled.Delete,
-                        contentDescription = "Hapus template ${template.name}",
-                        tint = Color(0xFFEF5350)
+                    Text(
+                        text = "Disembunyikan",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF9AA0AC)
                     )
                 }
             }

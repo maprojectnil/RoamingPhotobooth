@@ -86,7 +86,12 @@ class TemplateEditorActivity : ComponentActivity() {
             )
         } else {
             TemplateListScreen(
-                templates = templates,
+                // Template yang di-hide dari Settings > Frame List (lihat
+                // PhotoTemplate.isHidden) disaring di sini supaya TIDAK muncul
+                // sama sekali di carousel pemilihan bingkai saat sesi booth
+                // dimulai — beda dengan Settings > Frame List yang sengaja
+                // tetap menampilkannya (redup) supaya bisa di-unhide lagi.
+                templates = templates.filter { !it.isHidden },
                 frameFileManager = frameFileManager,
                 onTemplateSelected = { template ->
                     // Kirim balik ID template yang dipilih ke MainActivity
