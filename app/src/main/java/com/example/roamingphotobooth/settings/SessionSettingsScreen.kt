@@ -16,6 +16,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -34,7 +36,8 @@ import com.example.roamingphotobooth.ui.NumericStepper
 /**
  * Layar Settings > Session: atur nilai DEFAULT yang dipakai setiap kali sesi
  * booth baru dimulai — durasi Countdown Timer, Mirror Camera (preview + hasil
- * foto), dan Auto Countdown untuk slot kedua dst (mode Stand).
+ * foto), Auto Countdown untuk slot kedua dst (mode Stand), dan ID folder
+ * Google Drive tujuan upload (bisa dikosongkan untuk pakai default dari build).
  *
  * Sama seperti [AppearanceScreen]: perubahan hanya disimpan permanen begitu
  * user menekan "Simpan Perubahan" (lewat [onSave]) — sebelum itu cuma state
@@ -115,6 +118,50 @@ fun SessionSettingsScreen(
             checked = settings.autoCountdownNextSlots,
             onCheckedChange = { settings = settings.copy(autoCountdownNextSlots = it) }
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "Google Drive Folder ID",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Folder Drive tujuan upload foto hasil akhir. Ambil dari URL folder " +
+                        "Drive-nya (bagian setelah \"folders/\"). Kosongkan untuk pakai folder " +
+                        "default yang sudah diatur saat build aplikasi.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF9AA0AC)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = settings.driveFolderId,
+                    onValueChange = { settings = settings.copy(driveFolderId = it) },
+                    label = { Text("Folder ID") },
+                    placeholder = { Text("(pakai default dari build)") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedLabelColor = Color(0xFF4DD0E1),
+                        unfocusedLabelColor = Color(0xFF9AA0AC),
+                        focusedBorderColor = Color(0xFF4DD0E1),
+                        unfocusedBorderColor = Color(0x40FFFFFF)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(28.dp))
         Button(

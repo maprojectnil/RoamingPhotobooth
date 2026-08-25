@@ -21,7 +21,8 @@ class SessionSettingsStorage(context: Context) {
                 SessionSettings.COUNTDOWN_RANGE.last
             ),
             mirrorCamera = prefs.getBoolean(KEY_MIRROR_CAMERA, default.mirrorCamera),
-            autoCountdownNextSlots = prefs.getBoolean(KEY_AUTO_COUNTDOWN, default.autoCountdownNextSlots)
+            autoCountdownNextSlots = prefs.getBoolean(KEY_AUTO_COUNTDOWN, default.autoCountdownNextSlots),
+            driveFolderId = prefs.getString(KEY_DRIVE_FOLDER_ID, default.driveFolderId) ?: default.driveFolderId
         )
     }
 
@@ -30,6 +31,9 @@ class SessionSettingsStorage(context: Context) {
             .putInt(KEY_COUNTDOWN_SECONDS, settings.countdownSeconds)
             .putBoolean(KEY_MIRROR_CAMERA, settings.mirrorCamera)
             .putBoolean(KEY_AUTO_COUNTDOWN, settings.autoCountdownNextSlots)
+            // trim() supaya spasi nyasar (awal/akhir, umum kalau copy-paste ID folder
+            // dari URL Drive) tidak bikin ID folder ketolak/salah kirim ke API.
+            .putString(KEY_DRIVE_FOLDER_ID, settings.driveFolderId.trim())
             .apply()
     }
 
@@ -37,5 +41,6 @@ class SessionSettingsStorage(context: Context) {
         private const val KEY_COUNTDOWN_SECONDS = "countdown_seconds"
         private const val KEY_MIRROR_CAMERA = "mirror_camera"
         private const val KEY_AUTO_COUNTDOWN = "auto_countdown_next_slots"
+        private const val KEY_DRIVE_FOLDER_ID = "drive_folder_id"
     }
 }

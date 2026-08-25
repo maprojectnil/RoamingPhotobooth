@@ -24,7 +24,14 @@ data class SessionSettings(
 
     // Default false: sebelum fitur ini ada, user SELALU harus menekan tombol
     // shutter manual untuk tiap slot (tidak ada auto countdown).
-    val autoCountdownNextSlots: Boolean = false
+    val autoCountdownNextSlots: Boolean = false,
+
+    // <-- BARU: ID folder Google Drive tujuan upload foto hasil akhir, bisa
+    // di-custom LANGSUNG dari app (Settings > Session) tanpa perlu build ulang
+    // APK. Kosong ("") berarti "pakai default dari gradle.properties saat build"
+    // (BuildConfig.DRIVE_FOLDER_ID yang di-embed lewat project property
+    // DRIVE_FOLDER_ID) — lihat DriveUploadWorker.resolveDriveFolderId().
+    val driveFolderId: String = ""
 ) {
     companion object {
         const val DEFAULT_COUNTDOWN_SECONDS = 3

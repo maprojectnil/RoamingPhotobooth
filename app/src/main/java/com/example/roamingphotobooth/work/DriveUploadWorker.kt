@@ -9,6 +9,7 @@ import androidx.work.WorkerParameters
 import com.example.roamingphotobooth.BuildConfig
 import com.example.roamingphotobooth.drive.DriveAuth
 import com.example.roamingphotobooth.drive.DriveUploader
+import com.example.roamingphotobooth.settings.SessionSettingsStorage
 import com.example.roamingphotobooth.status.FirebaseAuthClient
 import com.example.roamingphotobooth.status.PhotoStatusRepository
 import kotlinx.coroutines.Dispatchers
@@ -70,7 +71,7 @@ class DriveUploadWorker(
                 clientSecret = BuildConfig.DRIVE_OAUTH_CLIENT_SECRET,
                 refreshToken = BuildConfig.DRIVE_OAUTH_REFRESH_TOKEN
             )
-            val uploader = DriveUploader(driveAuth, BuildConfig.DRIVE_FOLDER_ID)
+            val uploader = DriveUploader(driveAuth, resolveDriveFolderId())
 
             val jpegBytes = file.readBytes()
             val result = uploader.uploadBytes(fileName, jpegBytes)
@@ -95,6 +96,22 @@ class DriveUploadWorker(
                 Result.retry()
             }
         }
+    }
+
+    /**
+     * <-- BARU: Folder ID Drive sekarang bisa di-CUSTOM langsung dari app lewat
+     * Settings > Session (lihat SessionSettingsScreen/SessionSettingsStorage),
+     * tanpa perlu build ulang APK dengan gradle.properties baru. Dibaca ULANG di
+     * sini (bukan cuma sekali di awal doWork()) supaya kalau job ini di-retry
+     * setelah user sempat ganti settingnya, upload berikutnya pakai folder yang
+     * PALING BARU. Kalau field-nya kosong (user belum pernah isi), fallback ke
+     * BuildConfig.DRIVE_FOLDER_ID -- nilai yang di-embed dari gradle.properties
+     * saat build, supaya app yang belum pernah disentuh setting-nya tetap jalan
+     * seperti sebelumnya tanpa perubahan apa pun.
+     */
+    private fun resolveDriveFolderId(): String {
+        val custom = SessionSettingsStorage(applicationContext).load().driveFolderId.trim()
+        return custom.ifEmpty { BuildConfig.DRIVE_FOLDER_ID }
     }
 }
 

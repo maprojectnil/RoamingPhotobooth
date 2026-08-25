@@ -142,7 +142,11 @@ class MainActivity : ComponentActivity() {
     private var currentScreen = mutableStateOf(AppScreen.HOME)
     private var boothMode = mutableStateOf<BoothMode?>(null)
 
-    // --- State khusus alur capture mode STAND (countdown + shutter software + review) ---
+    // --- State alur capture "countdown + shutter software + review" — dipakai
+    // BERSAMA oleh Stand DAN Mobile (nama variabel masih berawalan "stand" untuk
+    // alasan historis, tapi sejak tampilan Mobile disamakan dengan Stand, state
+    // ini sekarang mengalir lewat StandBoothScreen untuk kedua mode). Lihat
+    // showPhotoInReviewScreen() & standStartCountdownAndCapture(). ---
 
     // Non-null selama countdown 3-2-1 berjalan sebelum shutter ditembak.
     private var standCountdownValue = mutableStateOf<Int?>(null)
@@ -156,8 +160,12 @@ class MainActivity : ComponentActivity() {
     private var standReviewPhotoBytes: ByteArray? = null
 
     // Dipakai buat "menangkap" 1 foto berikutnya dari kamera dan mengarahkannya ke
-    // layar review Stand, alih-alih langsung di-commit otomatis ke slot template
-    // (yang merupakan behavior default untuk mode Mobile / capture via tombol fisik).
+    // layar review (StandBoothScreen, dipakai bersama oleh Stand & Mobile) begitu
+    // capture-nya dipicu lewat SOFTWARE trigger (tombol shutter di layar: Stand,
+    // atau Mobile saat Developer Mode aktif — lihat standStartCountdownAndCapture()).
+    // Null selama menunggu shutter DI LAYAR ditekan. Mobile dengan kamera eksternal
+    // (tombol shutter FISIK) TIDAK PERNAH mengisi ini -- foto dari situ langsung
+    // diarahkan ke showPhotoInReviewScreen() dari onNewPhotoCaptured, lihat sana.
     private var pendingStandCaptureCallback: ((ByteArray) -> Unit)? = null
 
     // Dipakai standStartCountdownAndCapture() buat validasi timeout jaring pengaman —
@@ -185,11 +193,11 @@ class MainActivity : ComponentActivity() {
                 if (enteringStandAfterFramePick) {
                     boothMode.value = BoothMode.STAND
                 }
-                // showEmptySlotPlaceholders diambil LANGSUNG dari enteringStandAfterFramePick
-                // (bukan baca boothMode.value di dalam refreshPreview) — supaya TIDAK
-                // bergantung pada timing/urutan kapan boothMode.value ke-update. Ini akar
-                // penyebab kotak nomor slot sempat hilang pas sesi Stand baru dimulai.
-                loadActiveTemplate(templateId, showEmptySlotPlaceholders = enteringStandAfterFramePick)
+                // showEmptySlotPlaceholders SELALU true di sini -- tampilan preview kiri
+                // (kotak nomor slot yang masih kosong) sekarang SAMA untuk Mobile & Stand
+                // (lihat StandBoothScreen, dipakai bersama lewat MobileBoothScreen), jadi
+                // tidak perlu lagi baca/gantung ke enteringStandAfterFramePick/boothMode.
+                loadActiveTemplate(templateId, showEmptySlotPlaceholders = true)
                 if (enteringStandAfterFramePick) {
                     currentScreen.value = AppScreen.BOOTH
                 }
@@ -376,13 +384,21 @@ class MainActivity : ComponentActivity() {
                         BoothMode.MOBILE -> MobileBoothScreen(
                             status = statusText.value,
                             liveViewBitmap = liveViewBitmap.value,
-                            frameOverlayBitmap = frameOverlayBitmap.value,
                             previewBitmap = previewBitmap.value,
-                            activeTemplate = activeTemplate.value,
-                            currentSlotNumber = (templateSession?.filledSlots ?: 0) + 1,
-                            totalSlots = templateSession?.totalSlots ?: 0,
                             finalResultBitmap = finalResultBitmap.value,
                             qrCodeBitmap = qrCodeBitmap.value,
+                            // Tampilan Mobile disamakan dengan Stand -- lihat MobileBoothScreen &
+                            // StandBoothScreen. State countdown/isCapturing/isProcessing/reviewBitmap
+                            // di sini dipakai BERSAMA dengan Stand (lihat deklarasi standXxx di atas),
+                            // baik saat capture-nya lewat tombol fisik kamera (langsung masuk review,
+                            // lihat showPhotoInReviewScreen) maupun lewat Developer Mode (software
+                            // trigger + countdown, sama seperti Stand).
+                            countdownValue = standCountdownValue.value,
+                            isCapturing = standIsCapturing.value,
+                            isProcessing = standIsProcessing.value,
+                            reviewBitmap = standReviewBitmap.value,
+                            currentSlotNumber = (templateSession?.filledSlots ?: 0) + 1,
+                            totalSlots = templateSession?.totalSlots ?: 0,
                             mirrorEnabled = sessionMirrorEnabled.value,
                             onMirrorToggle = { sessionMirrorEnabled.value = it },
                             onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
@@ -392,14 +408,14 @@ class MainActivity : ComponentActivity() {
                                     android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
                                 )
                             },
-                            // <-- BARU: fitur Retake mode Mobile — lihat mobileRetakeLastPhoto().
-                            canRetake = templateSession?.canRetakeLastPhoto == true,
-                            onRetakeClick = { mobileRetakeLastPhoto() },
+                            onRetakeClick = { standRetakePhoto() },
+                            onAcceptClick = { standAcceptPhoto() },
                             // Developer Mode (kamera depan perangkat) tidak punya tombol
                             // shutter fisik terpisah seperti kamera eksternal -- tampilkan
-                            // tombol shutter di layar supaya user tetap bisa jepret.
+                            // tombol shutter di layar (software trigger + countdown, sama
+                            // seperti Stand) supaya user tetap bisa jepret.
                             showDeviceCameraShutter = developerModeEnabled.value,
-                            onDeviceCameraShutterClick = { activeCameraBackend.capturePhoto() }
+                            onDeviceCameraShutterClick = { standStartCountdownAndCapture() }
                         )
 
                         BoothMode.STAND -> StandBoothScreen(
@@ -561,8 +577,9 @@ class MainActivity : ComponentActivity() {
                 return@merge
             }
 
-            // Kalau lagi nunggu 1 foto buat layar review Stand (abis shutter software
-            // ditembak), arahkan ke situ dan JANGAN auto-commit ke slot template dulu.
+            // Kalau lagi nunggu 1 foto buat layar review (abis shutter software
+            // ditembak -- Stand ATAU Mobile Developer Mode), arahkan ke situ dan
+            // JANGAN auto-commit ke slot template dulu.
             val standCallback = pendingStandCaptureCallback
             if (standCallback != null) {
                 pendingStandCaptureCallback = null
@@ -570,6 +587,20 @@ class MainActivity : ComponentActivity() {
                 return@merge
             }
 
+            // Mobile dengan kamera eksternal (Developer Mode OFF): tidak ada software
+            // trigger sama sekali, jadi tidak akan pernah ada pendingStandCaptureCallback
+            // yang nunggu -- foto ini datang langsung dari tombol shutter FISIK di kamera.
+            // Arahkan langsung ke layar review yang SAMA dengan Stand (lihat
+            // showPhotoInReviewScreen), bukan auto-commit ke slot seperti sebelumnya.
+            if (boothMode.value == BoothMode.MOBILE && !developerModeEnabled.value && templateSession != null) {
+                showPhotoInReviewScreen(photoBytes)
+                return@merge
+            }
+
+            // Titik ini seharusnya sudah TIDAK PERNAH tercapai lagi selama ada template
+            // aktif (Stand & Mobile-kamera-fisik ditangani di atas, Mobile Developer Mode
+            // lewat pendingStandCaptureCallback juga di atas) — disisakan sebagai fallback
+            // aman kalau boothMode entah kenapa null di titik ini.
             val templateSess = templateSession
 
             if (templateSess == null) {
@@ -651,19 +682,12 @@ class MainActivity : ComponentActivity() {
      *
      * [showEmptySlotPlaceholders] mengontrol kotak nomor untuk slot yang masih kosong
      * (lihat [com.example.roamingphotobooth.template.TemplateSessionManager.buildPreviewImage]) —
-     * HANYA `true` di mode STAND, `false` di Mobile (live view kamera Mobile sendiri
-     * sudah ditampilkan langsung di slot target, jadi kotak nomor di sana cuma bikin
-     * ramai/tumpang tindih — lihat MobileBoothScreen.FrameCaptureArea).
-     *
-     * Default parameter (baca `boothMode.value` saat ini) dipakai untuk pemanggilan yang
-     * TIDAK terkait langsung dengan alur pilih-template (mis. [startNewSession] atau
-     * callback foto baru masuk) — di situ boothMode.value sudah pasti akurat karena
-     * sesi sedang berjalan di mode yang sama, tidak sedang berpindah mode. Untuk alur
-     * pilih-template (lihat [templatePickerLauncher] & [loadActiveTemplate]), flag ini
-     * SELALU dikirim eksplisit supaya tidak bergantung sama sekali pada timing kapan
-     * boothMode.value ke-update.
+     * SELALU `true` sekarang, untuk Mobile MAUPUN Stand: sejak tampilan Mobile disamakan
+     * dengan Stand (lihat StandBoothScreen/MobileBoothScreen), preview kiri di kedua mode
+     * sama-sama split-screen terpisah dari live view, jadi kotak nomor slot kosong selalu
+     * relevan buat nunjukin progress di kedua mode.
      */
-    private fun refreshPreview(showEmptySlotPlaceholders: Boolean = boothMode.value == BoothMode.STAND) {
+    private fun refreshPreview(showEmptySlotPlaceholders: Boolean = true) {
         val session = templateSession
         val frameBmp = frameOverlayBitmap.value
         previewBitmap.value = if (session != null && frameBmp != null) {
@@ -771,11 +795,40 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Dipanggil dari tombol shutter di layar (mode Stand): jalanin countdown
-     * 3-2-1 di UI, lalu kirim command capture ke kamera lewat EsCameraSession,
-     * dan nunggu foto masuk lewat pendingStandCaptureCallback (di-invoke dari
-     * session.onNewPhotoCaptured, lihat onCameraDeviceReady) sebelum ditampilkan
-     * di layar review.
+     * Isi layar REVIEW (foto + tombol Retake/Lanjut, lihat StandBoothScreen) dengan
+     * 1 foto yang baru masuk, TANPA commit ke slot template dulu (baru commit kalau
+     * user tekan "Lanjut" -- lihat standAcceptPhoto()). Dipakai BERSAMA oleh:
+     * - Capture software (Stand & Mobile Developer Mode), dipanggil dari
+     *   pendingStandCaptureCallback di standStartCountdownAndCapture().
+     * - Capture fisik (Mobile kamera eksternal), dipanggil LANGSUNG dari
+     *   onNewPhotoCaptured begitu foto dari tombol shutter fisik kamera masuk.
+     */
+    private fun showPhotoInReviewScreen(photoBytes: ByteArray) {
+        standReviewPhotoBytes = photoBytes
+        runOnUiThread {
+            // Mirror horizontal di sini juga (bukan cuma addPhoto()) supaya foto
+            // yang tampil di layar REVIEW sudah sama persis orientasinya dengan
+            // yang bakal masuk ke slot kalau user tekan "Lanjut".
+            val decoded = BitmapMerger.decodeBitmap(photoBytes)
+            standReviewBitmap.value = decoded?.let {
+                if (sessionMirrorEnabled.value) BitmapMerger.mirrorHorizontal(it) else it
+            }
+            standIsCapturing.value = false
+        }
+    }
+
+    /**
+     * Dipanggil dari tombol shutter DI LAYAR (mode Stand, atau Mobile saat
+     * Developer Mode aktif): jalanin countdown 3-2-1 di UI, lalu kirim command
+     * capture ke kamera lewat CameraBackend aktif, dan nunggu foto masuk lewat
+     * pendingStandCaptureCallback (di-invoke dari backend.onNewPhotoCaptured,
+     * lihat wireCameraCallbacks) sebelum ditampilkan di layar review lewat
+     * showPhotoInReviewScreen().
+     *
+     * TIDAK dipakai untuk Mobile dengan kamera eksternal (tombol shutter fisik) --
+     * di situ foto langsung masuk lewat onNewPhotoCaptured tanpa command capture
+     * dari app sama sekali, lihat showPhotoInReviewScreen() yang dipanggil
+     * langsung dari sana.
      */
     private fun standStartCountdownAndCapture() {
         if (standIsCapturing.value || standCountdownValue.value != null || standIsProcessing.value) return // cegah double-tap
@@ -797,19 +850,7 @@ class MainActivity : ComponentActivity() {
             // attempt yang baru itu.
             val requestId = ++standCaptureRequestId
 
-            pendingStandCaptureCallback = { photoBytes ->
-                standReviewPhotoBytes = photoBytes
-                runOnUiThread {
-                    // Mirror horizontal di sini juga (bukan cuma addPhoto()) supaya foto
-                    // yang tampil di layar REVIEW sudah sama persis orientasinya dengan
-                    // yang bakal masuk ke slot kalau user tekan "Lanjut".
-                    val decoded = BitmapMerger.decodeBitmap(photoBytes)
-                    standReviewBitmap.value = decoded?.let {
-                        if (sessionMirrorEnabled.value) BitmapMerger.mirrorHorizontal(it) else it
-                    }
-                    standIsCapturing.value = false
-                }
-            }
+            pendingStandCaptureCallback = { photoBytes -> showPhotoInReviewScreen(photoBytes) }
 
             if (!activeCameraBackend.capturePhoto()) {
                 runOnUiThread {
@@ -832,28 +873,6 @@ class MainActivity : ComponentActivity() {
                 pendingStandCaptureCallback = null
                 statusText.value = "⚠️ Foto tidak terdeteksi, coba lagi"
             }
-        }
-    }
-
-    /**
-     * <-- BARU: tombol Retake di Mobile Preview (lihat MobileBoothScreen.canRetake /
-     * onRetakeClick). Beda dari standRetakePhoto (yang buang foto di layar REVIEW
-     * sebelum sempat commit), di Mobile foto SUDAH ke-commit ke slot begitu jepret
-     * (tidak ada layar review) — jadi di sini kita buang foto slot TERAKHIR yang
-     * sudah masuk lewat TemplateSessionManager.removeLastPhoto(), lalu refresh
-     * preview supaya slot itu balik kosong dan siap dijepret ulang lewat tombol
-     * fisik kamera (nextSlotOrder otomatis balik nunjuk slot yang sama).
-     *
-     * Tidak berlaku saat layar hasil akhir (finalResultBitmap != null) sedang
-     * tampil -- di situ jepretan fisik baru sudah dianggap sinyal "sesi baru"
-     * (lihat onNewPhotoCaptured), jadi retake tidak relevan lagi di titik itu.
-     */
-    private fun mobileRetakeLastPhoto() {
-        if (finalResultBitmap.value != null) return
-        val session = templateSession ?: return
-        if (session.removeLastPhoto()) {
-            refreshPreview()
-            statusText.value = "🔄 Foto terakhir dibuang — jepret ulang untuk slot ${session.filledSlots + 1}"
         }
     }
 
@@ -936,7 +955,14 @@ class MainActivity : ComponentActivity() {
                 // kedua dan seterusnya -- foto PERTAMA tiap sesi tetap wajib manual
                 // tap shutter (baru dari sinilah, tiap "Lanjut" berikutnya, alur ini
                 // yang memicu countdown slot selanjutnya).
-                if (finalImage == null && sessionSettings.value.autoCountdownNextSlots) {
+                //
+                // HANYA berlaku untuk mode software-trigger (Stand, atau Mobile saat
+                // Developer Mode aktif) -- Mobile dengan kamera eksternal TIDAK punya
+                // cara memicu capture dari app sama sekali, jadi slot berikutnya wajib
+                // dipicu manual lewat tombol shutter fisik di kamera, sama seperti slot
+                // pertama.
+                val usesSoftwareTrigger = boothMode.value == BoothMode.STAND || developerModeEnabled.value
+                if (finalImage == null && usesSoftwareTrigger && sessionSettings.value.autoCountdownNextSlots) {
                     standStartCountdownAndCapture()
                 }
             }

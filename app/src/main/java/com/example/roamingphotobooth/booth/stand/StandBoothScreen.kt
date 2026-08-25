@@ -3,6 +3,7 @@ package com.example.roamingphotobooth.booth.stand
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,20 +33,25 @@ import androidx.compose.ui.unit.sp
 import com.example.roamingphotobooth.ui.FinalResultScreen
 
 /**
- * Layar booth mode STAND.
+ * Layar booth — dipakai BERSAMA oleh mode STAND dan mode MOBILE (lihat
+ * MobileBoothScreen, yang sekarang cuma wrapper tipis di atas composable ini).
  *
- * File ini SENGAJA TERPISAH dari MobileBoothScreen (beda folder/package:
- * booth.stand vs booth.mobile) — supaya gampang diubah salah satu tanpa
- * mempengaruhi yang lain.
+ * Tampilan Mobile & Stand SENGAJA DISAMAKAN persis di sini: satu-satunya
+ * perbedaan fungsional antara kedua mode ada di BAGAIMANA foto diambil —
+ * Stand (dan Mobile saat Developer Mode aktif, lihat DeviceCameraSession) pakai
+ * tombol shutter DI LAYAR (software trigger: tap -> countdown 3-2-1 -> app kirim
+ * command capture ke kamera), sedangkan Mobile dengan kamera eksternal beneran
+ * pakai tombol shutter FISIK di badan kamera (tidak ada tombol di layar sama
+ * sekali — lihat [showShutterButton]). Begitu foto masuk (dengan cara apa pun),
+ * alurnya SAMA: layar REVIEW muncul (foto + tombol Retake / Lanjut), dan "Lanjut"
+ * baru commit foto itu ke slot & lanjut ke slot berikutnya (atau ke hasil akhir
+ * kalau itu slot terakhir). Logic pemicu capture & pengisian review ada di
+ * MainActivity, bukan di sini.
  *
- * Alurnya (beda dari Mobile): saat sesi capture, layar dibagi dua (kiri ~30% /
- * kanan ~70%). Kiri nampilin preview frame (frame + foto-foto yang sudah
- * ke-capture, terisi di slot masing-masing — update tiap foto baru masuk).
- * Kanan nampilin live view kamera + tombol shutter.
- * Tap shutter -> countdown 3-2-1 -> app kirim command capture ke kamera
- * (software trigger) -> nunggu foto -> layar REVIEW muncul (foto + tombol
- * Retake / Lanjut). "Lanjut" baru commit foto itu ke slot & lanjut ke slot
- * berikutnya (atau ke hasil akhir kalau itu slot terakhir).
+ * Layout: saat sesi capture, layar dibagi dua (kiri ~30% / kanan ~70%). Kiri
+ * nampilin preview frame (frame + foto-foto yang sudah ke-capture, terisi di
+ * slot masing-masing — update tiap foto baru masuk). Kanan nampilin live view
+ * kamera + (kalau [showShutterButton] true) tombol shutter.
  */
 @Composable
 fun StandBoothScreen(
@@ -68,7 +74,20 @@ fun StandBoothScreen(
     onContinueClick: () -> Unit,
     onShutterClick: () -> Unit,
     onRetakeClick: () -> Unit,
-    onAcceptClick: () -> Unit
+    onAcceptClick: () -> Unit,
+    // <-- BARU: kontrol tombol shutter DI LAYAR. Default true (perilaku Stand
+    // asli, tidak berubah). Mobile dengan kamera eksternal set ini FALSE karena
+    // capture dipicu lewat tombol fisik di kamera, bukan lewat app — lihat
+    // MobileBoothScreen.showDeviceCameraShutter (kebalikannya: dipakai buat
+    // Developer Mode, yang TETAP butuh tombol di layar karena tidak ada tombol
+    // fisik terpisah untuk kamera depan perangkat).
+    showShutterButton: Boolean = true,
+    // <-- BARU: tombol pengaturan (ganti frame/template) di pojok kanan atas.
+    // Default false (Stand tidak pernah menampilkannya — pemilihan frame Stand
+    // terjadi SEBELUM masuk sesi lewat openStandFramePicker). Mobile set ini true
+    // supaya user bisa ganti frame di tengah sesi lewat TemplateEditorActivity.
+    showSettingsButton: Boolean = false,
+    onSettingsClick: () -> Unit = {}
 ) {
     Box(
         modifier = Modifier.fillMaxSize()
@@ -111,18 +130,27 @@ fun StandBoothScreen(
                     currentSlotNumber = currentSlotNumber,
                     totalSlots = totalSlots,
                     mirrorEnabled = mirrorEnabled,
+                    showShutterButton = showShutterButton,
                     onShutterClick = onShutterClick
                 )
 
-                // Tombol back + toggle Mirror — pojok kanan atas, sejajar (sama pola
-                // dengan Row back/setting di MobileBoothScreen).
+                // Tombol back/setting + toggle Mirror — pojok kanan atas, sejajar.
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
+                    if (showSettingsButton) {
+                        IconButton(onClick = onSettingsClick) {
+                            Text(
+                                text = "⚙️",
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                        }
+                    }
                     IconButton(onClick = onBackClick) {
                         Text(
                             text = "←",
@@ -162,6 +190,10 @@ private fun CaptureContent(
     currentSlotNumber: Int,
     totalSlots: Int,
     mirrorEnabled: Boolean,
+    // <-- BARU: lihat StandBoothScreen.showShutterButton. False -> tombol shutter
+    // di layar disembunyikan total (Mobile kamera eksternal: capture dipicu lewat
+    // tombol fisik di kamera, bukan lewat app).
+    showShutterButton: Boolean,
     onShutterClick: () -> Unit
 ) {
     // Split-screen: kiri ~30% preview frame (frame + foto yang sudah terisi),
@@ -239,24 +271,28 @@ private fun CaptureContent(
                 )
             }
 
-            // Tombol shutter — bulat, di bawah tengah
-            Button(
-                onClick = onShutterClick,
-                enabled = countdownValue == null && !isCapturing && !isProcessing,
-                shape = CircleShape,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 32.dp)
-                    .size(80.dp)
-            ) {
-                Text(
-                    text = when {
-                        isProcessing -> "💾" // masih nyimpen foto sebelumnya di background
-                        isCapturing -> "..."
-                        else -> "📷"
-                    },
-                    style = MaterialTheme.typography.headlineMedium
-                )
+            // Tombol shutter — bulat, di bawah tengah. Cuma tampil kalau capture
+            // dipicu lewat app (software trigger); Mobile kamera eksternal pakai
+            // tombol fisik di kamera, jadi tidak butuh tombol ini sama sekali.
+            if (showShutterButton) {
+                Button(
+                    onClick = onShutterClick,
+                    enabled = countdownValue == null && !isCapturing && !isProcessing,
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 32.dp)
+                        .size(80.dp)
+                ) {
+                    Text(
+                        text = when {
+                            isProcessing -> "💾" // masih nyimpen foto sebelumnya di background
+                            isCapturing -> "..."
+                            else -> "📷"
+                        },
+                        style = MaterialTheme.typography.headlineMedium
+                    )
+                }
             }
         }
     }
