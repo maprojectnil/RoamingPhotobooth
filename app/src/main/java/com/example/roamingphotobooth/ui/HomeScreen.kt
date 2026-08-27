@@ -1,5 +1,6 @@
 package com.example.roamingphotobooth.ui
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,7 +50,9 @@ fun HomeScreen(
     // <-- BARU: Galeri — riwayat sesi foto yang sudah selesai (recall print & QR
     // lama, lihat gallery.GalleryScreen). Tombol pojok kanan bawah, default no-op
     // supaya pemanggil lama yang belum diupdate tetap kompilasi.
-    onGalleryClick: () -> Unit = {}
+    onGalleryClick: () -> Unit = {},
+    liveViewBitmap: Bitmap?,
+    mirrorLiveViewBackground: Boolean
 ) {
     Box(
         modifier = Modifier
