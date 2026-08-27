@@ -84,7 +84,7 @@ fun StandBoothScreen(
     showShutterButton: Boolean = true,
     // <-- BARU: tombol pengaturan (ganti frame/template) di pojok kanan atas.
     // Default false (Stand tidak pernah menampilkannya — pemilihan frame Stand
-    // terjadi SEBELUM masuk sesi lewat openStandFramePicker). Mobile set ini true
+    // terjadi SEBELUM masuk sesi lewat MainActivity.openFramePicker()). Mobile set ini true
     // supaya user bisa ganti frame di tengah sesi lewat TemplateEditorActivity.
     showSettingsButton: Boolean = false,
     onSettingsClick: () -> Unit = {}

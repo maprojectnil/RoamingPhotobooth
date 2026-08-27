@@ -1,6 +1,7 @@
 package com.example.roamingphotobooth.settings
 
 import android.content.Context
+import com.example.roamingphotobooth.nav.BoothMode
 
 /**
  * Baca/simpan [SessionSettings] ke SharedPreferences. Pola sama persis dengan
@@ -15,7 +16,15 @@ class SessionSettingsStorage(context: Context) {
     fun load(): SessionSettings {
         val default = SessionSettings()
         val rawCountdown = prefs.getInt(KEY_COUNTDOWN_SECONDS, default.countdownSeconds)
+        // <-- BARU: boothMode disimpan sebagai nama enum (String). Kalau value-nya
+        // rusak/tidak dikenal (mis. dari versi lama sebelum fitur ini ada), jatuh
+        // balik ke default (BoothMode.STAND) lewat runCatching supaya tidak crash.
+        val rawBoothMode = prefs.getString(KEY_BOOTH_MODE, default.boothMode.name)
+        val boothMode = rawBoothMode
+            ?.let { name -> runCatching { BoothMode.valueOf(name) }.getOrNull() }
+            ?: default.boothMode
         return SessionSettings(
+            boothMode = boothMode,
             countdownSeconds = rawCountdown.coerceIn(
                 SessionSettings.COUNTDOWN_RANGE.first,
                 SessionSettings.COUNTDOWN_RANGE.last
@@ -28,6 +37,7 @@ class SessionSettingsStorage(context: Context) {
 
     fun save(settings: SessionSettings) {
         prefs.edit()
+            .putString(KEY_BOOTH_MODE, settings.boothMode.name)
             .putInt(KEY_COUNTDOWN_SECONDS, settings.countdownSeconds)
             .putBoolean(KEY_MIRROR_CAMERA, settings.mirrorCamera)
             .putBoolean(KEY_AUTO_COUNTDOWN, settings.autoCountdownNextSlots)
@@ -38,6 +48,7 @@ class SessionSettingsStorage(context: Context) {
     }
 
     companion object {
+        private const val KEY_BOOTH_MODE = "booth_mode"
         private const val KEY_COUNTDOWN_SECONDS = "countdown_seconds"
         private const val KEY_MIRROR_CAMERA = "mirror_camera"
         private const val KEY_AUTO_COUNTDOWN = "auto_countdown_next_slots"

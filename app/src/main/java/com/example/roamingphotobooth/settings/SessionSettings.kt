@@ -1,5 +1,7 @@
 package com.example.roamingphotobooth.settings
 
+import com.example.roamingphotobooth.nav.BoothMode
+
 /**
  * Pengaturan DEFAULT untuk sesi booth (Mobile & Stand), diatur lewat
  * Settings > Session (lihat [SessionSettingsScreen]) dan disimpan lewat
@@ -13,6 +15,13 @@ package com.example.roamingphotobooth.settings
  * tanpa mengubah default global di sini (lihat MainActivity.sessionMirrorEnabled).
  */
 data class SessionSettings(
+    // <-- BARU: menggantikan layar Mode Select (Mobile/Stand) yang sudah
+    // dihapus dari alur Home -> Booth. Diatur lewat switch "Mode Booth" di
+    // Settings > Session (lihat [SessionSettingsScreen]) -- begitu user
+    // menekan "Mulai" di Home, app langsung pakai mode ini tanpa nanya lagi
+    // (lihat MainActivity.openFramePicker()).
+    val boothMode: BoothMode = BoothMode.STAND,
+
     // Durasi countdown (detik) sebelum shutter software ditembak di mode Stand.
     // Dipakai sebagai titik awal hitung mundur (mis. 3 -> 3, 2, 1).
     val countdownSeconds: Int = DEFAULT_COUNTDOWN_SECONDS,

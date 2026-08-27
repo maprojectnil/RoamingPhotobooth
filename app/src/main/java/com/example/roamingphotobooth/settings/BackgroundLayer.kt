@@ -27,8 +27,7 @@ import androidx.media3.ui.PlayerView
  * kelebihan (bukan letterbox), sesuai gaya background pada umumnya.
  *
  * Kalau [background].path null (belum diatur user), tidak menggambar apa-apa
- * — pemanggil (HomeScreen/ModeSelectScreen) tetap punya warna latar default
- * di baliknya.
+ * — pemanggil (HomeScreen) tetap punya warna latar default di baliknya.
  */
 @Composable
 fun BackgroundLayer(
@@ -42,6 +41,42 @@ fun BackgroundLayer(
     } else {
         ImageBackground(path = path, modifier = modifier)
     }
+}
+
+/**
+ * <-- BARU: menggambar file PNG (dari [path]) DI ATAS background lain (live
+ * view atau [BackgroundLayer]) — dipakai HomeScreen untuk overlay opsional
+ * (mis. logo event/bingkai dekoratif) di atas background Home, lihat
+ * AppearanceSettings.homeOverlayImagePath & AppearanceScreen "Overlay PNG".
+ *
+ * Pakai [ContentScale.Fit] (BUKAN Crop seperti [BackgroundLayer]) supaya
+ * seluruh gambar overlay selalu utuh terlihat & tidak terpotong, karena
+ * overlay biasanya logo/elemen dekoratif yang bentuknya penting dijaga
+ * (beda dengan background utama yang memang didesain full-bleed).
+ *
+ * Kalau [path] null (belum diatur user), tidak menggambar apa-apa.
+ */
+@Composable
+fun OverlayPngLayer(
+    path: String?,
+    modifier: Modifier = Modifier
+) {
+    if (path == null) return
+
+    val bitmap = remember(path) {
+        try {
+            BitmapFactory.decodeFile(path)
+        } catch (e: Exception) {
+            null
+        }
+    } ?: return
+
+    Image(
+        bitmap = bitmap.asImageBitmap(),
+        contentDescription = null,
+        contentScale = ContentScale.Fit,
+        modifier = modifier.fillMaxSize()
+    )
 }
 
 @Composable

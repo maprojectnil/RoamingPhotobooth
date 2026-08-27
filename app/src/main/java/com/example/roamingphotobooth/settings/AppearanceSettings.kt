@@ -15,18 +15,40 @@ data class BackgroundSetting(
 /**
  * Seluruh pengaturan tampilan yang bisa diubah user lewat menu
  * Settings > Appearance. Disimpan lewat [AppearanceStorage] dan dibaca ulang
- * oleh HomeScreen & ModeSelectScreen supaya perubahan langsung terlihat.
+ * oleh HomeScreen supaya perubahan langsung terlihat.
+ *
+ * <-- BERUBAH: [modeSelectBackground], [mobileButtonText], [standButtonText]
+ * DIHAPUS -- layar "Pilih Mode" sudah tidak ada lagi di alur app (lihat
+ * nav.AppScreen), digantikan switch Mobile/Stand di Settings > Session
+ * (lihat SessionSettings.boothMode).
  */
 data class AppearanceSettings(
     val homeBackground: BackgroundSetting = BackgroundSetting(),
-    val modeSelectBackground: BackgroundSetting = BackgroundSetting(),
     // Disimpan sebagai Int hasil android.graphics.Color.argb agar gampang
     // diserialisasi & langsung dipakai sebagai warna Compose (Color(argbInt)).
     val buttonColorArgb: Int = DEFAULT_BUTTON_COLOR,
     val accentColorArgb: Int = DEFAULT_ACCENT_COLOR,
     val startButtonText: String = "Mulai",
-    val mobileButtonText: String = "📱 Mobile",
-    val standButtonText: String = "🖥️ Stand"
+
+    // <-- BARU: warna logo/ikon tombol "Mulai" (lihat ui.HomeScreen -- tombol
+    // Mulai sekarang berupa logo kamera SVG/vector, bukan teks lagi, di-tint
+    // pakai warna ini lewat ColorFilter.tint). Terpisah dari [buttonColorArgb]
+    // supaya user bisa atur warna logo independen dari warna tombol lain.
+    val startButtonIconColorArgb: Int = DEFAULT_BUTTON_COLOR,
+
+    // <-- BARU: kalau true, HomeScreen pakai live view kamera (bitmap yang
+    // sama dengan preview di layar Booth) sebagai background, BUKAN
+    // [homeBackground] (gambar/video statis) -- lihat ui.HomeScreen &
+    // MainActivity (parameter liveViewBitmap). Kalau live view belum ada
+    // (mis. kamera belum tersambung), HomeScreen tetap jatuh balik ke
+    // [homeBackground]/latar hitam seperti biasa.
+    val useLiveViewAsHomeBackground: Boolean = false,
+
+    // <-- BARU: path file PNG (hasil copy ke internal storage lewat
+    // [MediaFileManager], sama seperti [homeBackground]) yang digambar DI ATAS
+    // background Home (baik live view maupun gambar/video statis) -- mis.
+    // logo event atau bingkai dekoratif. Null berarti tidak ada overlay.
+    val homeOverlayImagePath: String? = null
 ) {
     companion object {
         const val DEFAULT_BUTTON_COLOR = 0xFF4DD0E1.toInt()

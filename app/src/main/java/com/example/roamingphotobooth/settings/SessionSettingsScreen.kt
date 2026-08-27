@@ -1,5 +1,7 @@
 package com.example.roamingphotobooth.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,16 +30,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.roamingphotobooth.nav.BoothMode
 import com.example.roamingphotobooth.ui.NumericStepper
 
 /**
  * Layar Settings > Session: atur nilai DEFAULT yang dipakai setiap kali sesi
- * booth baru dimulai — durasi Countdown Timer, Mirror Camera (preview + hasil
- * foto), Auto Countdown untuk slot kedua dst (mode Stand), dan ID folder
- * Google Drive tujuan upload (bisa dikosongkan untuk pakai default dari build).
+ * booth baru dimulai — Mode Booth (Mobile/Stand, lihat catatan [BoothModeSwitchCard]),
+ * durasi Countdown Timer, Mirror Camera (preview + hasil foto), Auto Countdown
+ * untuk slot kedua dst (mode Stand), dan ID folder Google Drive tujuan upload
+ * (bisa dikosongkan untuk pakai default dari build).
  *
  * Sama seperti [AppearanceScreen]: perubahan hanya disimpan permanen begitu
  * user menekan "Simpan Perubahan" (lewat [onSave]) — sebelum itu cuma state
@@ -69,6 +74,12 @@ fun SessionSettingsScreen(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+        BoothModeSwitchCard(
+            boothMode = settings.boothMode,
+            onBoothModeChange = { settings = settings.copy(boothMode = it) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33))
@@ -175,6 +186,90 @@ fun SessionSettingsScreen(
             )
         }
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+/**
+ * Switch Mode Booth (Mobile/Stand) — menggantikan layar "Pilih Mode" yang
+ * dulu muncul tiap kali user menekan "Mulai" di Home. Sekarang mode
+ * ditentukan SEKALI di sini; begitu user menekan Mulai, app langsung masuk
+ * ke pemilihan frame lalu ke sesi booth memakai mode ini (lihat
+ * MainActivity.openFramePicker()) -- tidak ada lagi layar perantara.
+ */
+@Composable
+private fun BoothModeSwitchCard(
+    boothMode: BoothMode,
+    onBoothModeChange: (BoothMode) -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = "Mode Booth",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+            Text(
+                text = "Menggantikan layar \"Pilih Mode\" -- begitu user menekan \"Mulai\" di Home, " +
+                    "app langsung masuk ke pemilihan frame lalu ke sesi booth memakai mode ini.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF9AA0AC)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF16181D))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                BoothModeOption(
+                    label = "📱 Mobile",
+                    selected = boothMode == BoothMode.MOBILE,
+                    onClick = { onBoothModeChange(BoothMode.MOBILE) },
+                    modifier = Modifier.weight(1f)
+                )
+                BoothModeOption(
+                    label = "🖥️ Stand",
+                    selected = boothMode == BoothMode.STAND,
+                    onClick = { onBoothModeChange(BoothMode.STAND) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BoothModeOption(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(11.dp))
+            .background(if (selected) Color(0xFF4DD0E1) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        horizontalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) Color(0xFF0B0D11) else Color(0xFF9AA0AC)
+        )
     }
 }
 

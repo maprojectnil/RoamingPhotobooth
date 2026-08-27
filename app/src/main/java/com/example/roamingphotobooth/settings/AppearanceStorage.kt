@@ -19,15 +19,15 @@ class AppearanceStorage(context: Context) {
                 path = prefs.getString(KEY_HOME_BG_PATH, null),
                 isVideo = prefs.getBoolean(KEY_HOME_BG_IS_VIDEO, false)
             ),
-            modeSelectBackground = BackgroundSetting(
-                path = prefs.getString(KEY_MODE_BG_PATH, null),
-                isVideo = prefs.getBoolean(KEY_MODE_BG_IS_VIDEO, false)
-            ),
             buttonColorArgb = prefs.getInt(KEY_BUTTON_COLOR, default.buttonColorArgb),
             accentColorArgb = prefs.getInt(KEY_ACCENT_COLOR, default.accentColorArgb),
             startButtonText = prefs.getString(KEY_START_TEXT, default.startButtonText) ?: default.startButtonText,
-            mobileButtonText = prefs.getString(KEY_MOBILE_TEXT, default.mobileButtonText) ?: default.mobileButtonText,
-            standButtonText = prefs.getString(KEY_STAND_TEXT, default.standButtonText) ?: default.standButtonText
+            startButtonIconColorArgb = prefs.getInt(KEY_START_ICON_COLOR, default.startButtonIconColorArgb),
+            useLiveViewAsHomeBackground = prefs.getBoolean(
+                KEY_USE_LIVE_VIEW_HOME_BG,
+                default.useLiveViewAsHomeBackground
+            ),
+            homeOverlayImagePath = prefs.getString(KEY_HOME_OVERLAY_PATH, null)
         )
     }
 
@@ -35,25 +35,23 @@ class AppearanceStorage(context: Context) {
         prefs.edit()
             .putString(KEY_HOME_BG_PATH, settings.homeBackground.path)
             .putBoolean(KEY_HOME_BG_IS_VIDEO, settings.homeBackground.isVideo)
-            .putString(KEY_MODE_BG_PATH, settings.modeSelectBackground.path)
-            .putBoolean(KEY_MODE_BG_IS_VIDEO, settings.modeSelectBackground.isVideo)
             .putInt(KEY_BUTTON_COLOR, settings.buttonColorArgb)
             .putInt(KEY_ACCENT_COLOR, settings.accentColorArgb)
             .putString(KEY_START_TEXT, settings.startButtonText)
-            .putString(KEY_MOBILE_TEXT, settings.mobileButtonText)
-            .putString(KEY_STAND_TEXT, settings.standButtonText)
+            .putInt(KEY_START_ICON_COLOR, settings.startButtonIconColorArgb)
+            .putBoolean(KEY_USE_LIVE_VIEW_HOME_BG, settings.useLiveViewAsHomeBackground)
+            .putString(KEY_HOME_OVERLAY_PATH, settings.homeOverlayImagePath)
             .apply()
     }
 
     companion object {
         private const val KEY_HOME_BG_PATH = "home_bg_path"
         private const val KEY_HOME_BG_IS_VIDEO = "home_bg_is_video"
-        private const val KEY_MODE_BG_PATH = "mode_bg_path"
-        private const val KEY_MODE_BG_IS_VIDEO = "mode_bg_is_video"
         private const val KEY_BUTTON_COLOR = "button_color"
         private const val KEY_ACCENT_COLOR = "accent_color"
         private const val KEY_START_TEXT = "start_button_text"
-        private const val KEY_MOBILE_TEXT = "mobile_button_text"
-        private const val KEY_STAND_TEXT = "stand_button_text"
+        private const val KEY_START_ICON_COLOR = "start_button_icon_color"
+        private const val KEY_USE_LIVE_VIEW_HOME_BG = "use_live_view_home_bg"
+        private const val KEY_HOME_OVERLAY_PATH = "home_overlay_path"
     }
 }
