@@ -44,7 +44,6 @@ import com.example.roamingphotobooth.ptp.EsCameraSession
 import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 import com.example.roamingphotobooth.ptp.BitmapMerger
 import com.example.roamingphotobooth.ui.HomeScreen
-import com.example.roamingphotobooth.ui.ModeSelectScreen
 import com.example.roamingphotobooth.settings.AppearanceSettings
 import com.example.roamingphotobooth.settings.AppearanceStorage
 import com.example.roamingphotobooth.settings.SettingsActivity
@@ -177,9 +176,14 @@ class MainActivity : ComponentActivity() {
     // selama proses itu berjalan (lihat standAcceptPhoto()).
     private var standIsProcessing = mutableStateOf(false)
 
-    // True kalau user baru saja klik "Stand" di Mode Select dan lagi nunggu hasil
-    // pilih-frame — begitu template dipilih, langsung lanjut masuk ke sesi Stand.
-    private var enteringStandAfterFramePick = false
+    // <-- BERUBAH: dulu bernama enteringStandAfterFramePick & cuma dipakai buat
+    // alur "Stand" (Mobile langsung ke BOOTH tanpa pilih frame dulu). Sekarang
+    // layar "Pilih Mode" sudah dihapus -- Home langsung buka pemilihan frame
+    // untuk KEDUA mode (Mobile maupun Stand), jadi flag ini digeneralisasi:
+    // true kalau user baru saja menekan "Mulai" di Home dan lagi nunggu hasil
+    // pilih-frame — begitu template dipilih, langsung lanjut masuk ke sesi
+    // booth (lihat openFramePicker()).
+    private var enteringBoothAfterFramePick = false
 
     private val templatePickerLauncher = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -187,23 +191,19 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK) {
             val templateId = result.data?.getStringExtra("selected_template_id")
             if (templateId != null) {
-                // Set boothMode DULU sebelum loadActiveTemplate() — dipakai composable
-                // buat nentuin layar mana (Mobile/Stand) yang dirender begitu
-                // currentScreen pindah ke BOOTH di bawah.
-                if (enteringStandAfterFramePick) {
-                    boothMode.value = BoothMode.STAND
-                }
                 // showEmptySlotPlaceholders SELALU true di sini -- tampilan preview kiri
                 // (kotak nomor slot yang masih kosong) sekarang SAMA untuk Mobile & Stand
-                // (lihat StandBoothScreen, dipakai bersama lewat MobileBoothScreen), jadi
-                // tidak perlu lagi baca/gantung ke enteringStandAfterFramePick/boothMode.
+                // (lihat StandBoothScreen, dipakai bersama lewat MobileBoothScreen).
                 loadActiveTemplate(templateId, showEmptySlotPlaceholders = true)
-                if (enteringStandAfterFramePick) {
+                if (enteringBoothAfterFramePick) {
+                    // boothMode.value SUDAH diisi dari sessionSettings.value.boothMode
+                    // di openFramePicker() SEBELUM launcher ini dipanggil -- tidak perlu
+                    // di-set lagi di sini.
                     currentScreen.value = AppScreen.BOOTH
                 }
             }
         }
-        enteringStandAfterFramePick = false
+        enteringBoothAfterFramePick = false
     }
 
 
@@ -353,14 +353,27 @@ class MainActivity : ComponentActivity() {
         setContent {
             RoamingPhotoboothTheme {
                 when (currentScreen.value) {
+                    // <-- BERUBAH: onMulaiClick dulu pindah ke AppScreen.MODE_SELECT
+                    // (layar pilih Mobile/Stand). Sekarang layar itu sudah dihapus --
+                    // langsung buka pemilihan frame (openFramePicker()) memakai mode
+                    // yang sudah diatur lewat switch di Settings > Session, lalu
+                    // masuk ke AppScreen.BOOTH begitu template dipilih (lihat
+                    // templatePickerLauncher).
                     AppScreen.HOME -> HomeScreen(
-                        onMulaiClick = { currentScreen.value = AppScreen.MODE_SELECT },
+                        onMulaiClick = { openFramePicker() },
                         onSettingsClick = {
                             settingsLauncher.launch(
                                 android.content.Intent(this, SettingsActivity::class.java)
                             )
                         },
                         appearance = appearanceSettings.value,
+                        // <-- BARU: live view kamera terkini, dipakai HomeScreen sebagai
+                        // background Home kalau appearance.useLiveViewAsHomeBackground
+                        // aktif (lihat Settings > Appearance). Null selama kamera belum
+                        // tersambung -- HomeScreen otomatis jatuh balik ke background
+                        // statis/hitam di kondisi itu.
+                        liveViewBitmap = liveViewBitmap.value,
+                        mirrorLiveViewBackground = sessionSettings.value.mirrorCamera,
                         kioskModeEnabled = kioskModeEnabled.value,
                         onEnableKioskMode = { enableKioskMode() },
                         onDisableKioskMode = { disableKioskMode() },
@@ -368,16 +381,6 @@ class MainActivity : ComponentActivity() {
                         onEnableDeveloperMode = { enableDeveloperMode() },
                         onDisableDeveloperMode = { disableDeveloperMode() },
                         onGalleryClick = { openGallery() }
-                    )
-
-                    AppScreen.MODE_SELECT -> ModeSelectScreen(
-                        onMobileClick = {
-                            boothMode.value = BoothMode.MOBILE
-                            currentScreen.value = AppScreen.BOOTH
-                        },
-                        onStandClick = { openStandFramePicker() },
-                        onBackClick = { currentScreen.value = AppScreen.HOME },
-                        appearance = appearanceSettings.value
                     )
 
                     AppScreen.BOOTH -> when (boothMode.value) {
@@ -401,7 +404,10 @@ class MainActivity : ComponentActivity() {
                             totalSlots = templateSession?.totalSlots ?: 0,
                             mirrorEnabled = sessionMirrorEnabled.value,
                             onMirrorToggle = { sessionMirrorEnabled.value = it },
-                            onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
+                            // <-- BERUBAH: dulu balik ke AppScreen.MODE_SELECT (layar
+                            // pilih Mobile/Stand). Sekarang layar itu sudah dihapus --
+                            // balik langsung ke Home.
+                            onBackClick = { currentScreen.value = AppScreen.HOME },
                             onContinueClick = { startNewSession() },
                             onSettingsClick = {
                                 templatePickerLauncher.launch(
@@ -432,22 +438,25 @@ class MainActivity : ComponentActivity() {
                             totalSlots = templateSession?.totalSlots ?: 0,
                             mirrorEnabled = sessionMirrorEnabled.value,
                             onMirrorToggle = { sessionMirrorEnabled.value = it },
-                            onBackClick = { currentScreen.value = AppScreen.MODE_SELECT },
+                            // <-- BERUBAH: sama seperti MobileBoothScreen di atas --
+                            // dulu balik ke AppScreen.MODE_SELECT, sekarang langsung
+                            // ke Home karena layar Mode Select sudah dihapus.
+                            onBackClick = { currentScreen.value = AppScreen.HOME },
                             onContinueClick = { startNewSession() },
                             onShutterClick = { standStartCountdownAndCapture() },
                             onRetakeClick = { standRetakePhoto() },
                             onAcceptClick = { standAcceptPhoto() }
                         )
 
-                        null -> ModeSelectScreen(
-                            onMobileClick = {
-                                boothMode.value = BoothMode.MOBILE
-                                currentScreen.value = AppScreen.BOOTH
-                            },
-                            onStandClick = { openStandFramePicker() },
-                            onBackClick = { currentScreen.value = AppScreen.HOME },
-                            appearance = appearanceSettings.value
-                        )
+                        // Failsafe: seharusnya tidak pernah tercapai, karena boothMode.value
+                        // SELALU diisi (dari sessionSettings.value.boothMode) di
+                        // openFramePicker() SEBELUM currentScreen pindah ke AppScreen.BOOTH
+                        // -- lihat templatePickerLauncher & openFramePicker() di atas. Kalau
+                        // tetap null (mis. state process-death yang aneh), balik ke Home
+                        // dengan aman daripada crash/nge-render layar kosong.
+                        null -> {
+                            currentScreen.value = AppScreen.HOME
+                        }
                     }
 
                     // <-- BARU: Galeri — riwayat sesi foto yang sudah selesai.
@@ -719,12 +728,22 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Dipanggil dari tombol "Stand" di Mode Select: buka layar pilih frame dulu.
-     * Begitu user pilih template, templatePickerLauncher (lihat atas) otomatis
-     * lanjut masuk ke sesi Stand karena enteringStandAfterFramePick di-set true.
+     * <-- BERUBAH: dulu bernama openStandFramePicker(), cuma dipanggil dari
+     * tombol "Stand" di layar Mode Select (yang sekarang sudah dihapus).
+     * Sekarang dipanggil LANGSUNG dari tombol logo "Mulai" di Home (lihat
+     * onMulaiClick di setContent di bawah) untuk KEDUA mode -- boothMode
+     * diambil dari default yang diatur lewat switch Mobile/Stand di
+     * Settings > Session (lihat SessionSettings.boothMode), BUKAN dipilih
+     * user tiap sesi lagi.
+     *
+     * Set boothMode.value DULU sebelum buka layar pilih frame, supaya kalau
+     * user membatalkan (back) tanpa pilih template, kembalinya tetap ke Home
+     * seperti biasa (currentScreen tidak diubah sampai template benar-benar
+     * terpilih -- lihat templatePickerLauncher di atas).
      */
-    private fun openStandFramePicker() {
-        enteringStandAfterFramePick = true
+    private fun openFramePicker() {
+        boothMode.value = sessionSettings.value.boothMode
+        enteringBoothAfterFramePick = true
         templatePickerLauncher.launch(
             android.content.Intent(this, com.example.roamingphotobooth.template.TemplateEditorActivity::class.java)
         )
