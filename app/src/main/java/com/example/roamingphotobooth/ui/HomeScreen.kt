@@ -1,6 +1,7 @@
 package com.example.roamingphotobooth.ui
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,11 +16,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.roamingphotobooth.R
 import com.example.roamingphotobooth.settings.AppearanceSettings
 import com.example.roamingphotobooth.settings.BackgroundLayer
+import com.example.roamingphotobooth.settings.OverlayPngLayer
 
 /**
  * Layar pertama saat aplikasi dibuka: tombol "Mulai" di tengah, dan ikon
@@ -59,8 +64,39 @@ fun HomeScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        BackgroundLayer(
-            background = appearance.homeBackground,
+        // <-- FIX: sebelumnya appearance.useLiveViewAsHomeBackground &
+        // liveViewBitmap tidak pernah dicek di sini, jadi BackgroundLayer
+        // (homeBackground statis) SELALU digambar dan menutupi live view.
+        // Sekarang: kalau toggle "pakai live view sebagai background Home"
+        // aktif DAN bitmap live view sudah ada (kamera tersambung & sudah
+        // mengirim frame), tampilkan live view sebagai background. Kalau
+        // belum ada (mis. kamera belum tersambung), tetap fallback ke
+        // BackgroundLayer/latar hitam seperti sebelumnya.
+        if (appearance.useLiveViewAsHomeBackground && liveViewBitmap != null) {
+            Image(
+                bitmap = liveViewBitmap.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .let {
+                        if (mirrorLiveViewBackground) it.scale(scaleX = -1f, scaleY = 1f) else it
+                    }
+            )
+        } else {
+            BackgroundLayer(
+                background = appearance.homeBackground,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // <-- FIX: sebelumnya OverlayPngLayer tidak pernah dipanggil di
+        // HomeScreen sama sekali, jadi overlay PNG yang dipilih user di
+        // Settings > Appearance ("Overlay PNG") tersimpan tapi tidak pernah
+        // digambar. Digambar DI ATAS background (live view maupun statis),
+        // sesuai dokumentasi asli AppearanceSettings.homeOverlayImagePath.
+        OverlayPngLayer(
+            path = appearance.homeOverlayImagePath,
             modifier = Modifier.fillMaxSize()
         )
 
