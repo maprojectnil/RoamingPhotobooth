@@ -143,6 +143,18 @@ fun AppearanceScreen(
         )
 
         Spacer(modifier = Modifier.height(16.dp))
+        // <-- BARU: tampilkan/sembunyikan kotak status ("Menunggu kamera...",
+        // progres foto, error, dll) di pojok kiri atas selama sesi foto --
+        // lihat AppearanceSettings.showStatusText & StandBoothScreen.
+        AppearanceToggleCard(
+            title = "Tampilkan Status Text",
+            description = "ON: kotak status (mis. \"Menunggu kamera...\", progres foto, error) " +
+                "tetap muncul di pojok kiri atas saat sesi foto. OFF: kotak status disembunyikan.",
+            checked = settings.showStatusText,
+            onCheckedChange = { settings = settings.copy(showStatusText = it) }
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
         OverlayPickerCard(
             overlayPath = settings.homeOverlayImagePath,
             onPickClick = {

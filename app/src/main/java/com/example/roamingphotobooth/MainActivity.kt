@@ -421,7 +421,8 @@ class MainActivity : ComponentActivity() {
                             // tombol shutter di layar (software trigger + countdown, sama
                             // seperti Stand) supaya user tetap bisa jepret.
                             showDeviceCameraShutter = developerModeEnabled.value,
-                            onDeviceCameraShutterClick = { standStartCountdownAndCapture() }
+                            onDeviceCameraShutterClick = { standStartCountdownAndCapture() },
+                            appearance = appearanceSettings.value
                         )
 
                         BoothMode.STAND -> StandBoothScreen(
@@ -445,7 +446,8 @@ class MainActivity : ComponentActivity() {
                             onContinueClick = { startNewSession() },
                             onShutterClick = { standStartCountdownAndCapture() },
                             onRetakeClick = { standRetakePhoto() },
-                            onAcceptClick = { standAcceptPhoto() }
+                            onAcceptClick = { standAcceptPhoto() },
+                            appearance = appearanceSettings.value
                         )
 
                         // Failsafe: seharusnya tidak pernah tercapai, karena boothMode.value

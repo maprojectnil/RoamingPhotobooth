@@ -11,9 +11,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,8 +28,11 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.roamingphotobooth.R
+import com.example.roamingphotobooth.settings.AppearanceSettings
 import com.example.roamingphotobooth.ui.FinalResultScreen
 
 /**
@@ -87,7 +90,14 @@ fun StandBoothScreen(
     // terjadi SEBELUM masuk sesi lewat MainActivity.openFramePicker()). Mobile set ini true
     // supaya user bisa ganti frame di tengah sesi lewat TemplateEditorActivity.
     showSettingsButton: Boolean = false,
-    onSettingsClick: () -> Unit = {}
+    onSettingsClick: () -> Unit = {},
+    // <-- BARU: dipakai untuk (1) tombol shutter di sesi capture -- tampilannya
+    // disamakan dengan tombol "Mulai" di HomeScreen, pakai logo & warna yang
+    // sama (lihat AppearanceSettings.startButtonIconColorArgb/startButtonSizeDp
+    // & CaptureContent di bawah) -- dan (2) kontrol tampil/sembunyi kotak
+    // status lewat [AppearanceSettings.showStatusText]. Default instance
+    // kosong supaya pemanggil lama yang belum diupdate tetap kompilasi.
+    appearance: AppearanceSettings = AppearanceSettings()
 ) {
     Box(
         modifier = Modifier.fillMaxSize()
@@ -131,7 +141,8 @@ fun StandBoothScreen(
                     totalSlots = totalSlots,
                     mirrorEnabled = mirrorEnabled,
                     showShutterButton = showShutterButton,
-                    onShutterClick = onShutterClick
+                    onShutterClick = onShutterClick,
+                    appearance = appearance
                 )
 
                 // Tombol back/setting + toggle Mirror — pojok kanan atas, sejajar.
@@ -145,9 +156,13 @@ fun StandBoothScreen(
                     MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
                     if (showSettingsButton) {
                         IconButton(onClick = onSettingsClick) {
-                            Text(
-                                text = "⚙️",
-                                style = MaterialTheme.typography.headlineSmall
+                            // <-- BERUBAH: dulu emoji "⚙️", sekarang diseragamkan
+                            // pakai logo setting yang sama di seluruh app (lihat
+                            // res/drawable/ic_settings_logo.xml & HomeScreen).
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_settings_logo),
+                                contentDescription = "Pengaturan",
+                                tint = Color.White
                             )
                         }
                     }
@@ -162,20 +177,24 @@ fun StandBoothScreen(
             }
         }
 
-        // Status text — selalu tampil di pojok kiri atas.
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp),
-            color = Color.Black.copy(alpha = 0.6f),
-            shape = RoundedCornerShape(8.dp)
-        ) {
-            Text(
-                text = status,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color.White,
-                modifier = Modifier.padding(12.dp)
-            )
+        // Status text — pojok kiri atas, bisa disembunyikan lewat setting
+        // "Tampilkan Status Text" di Settings > Appearance (default ON, lihat
+        // AppearanceSettings.showStatusText).
+        if (appearance.showStatusText) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
         }
     }
 }
@@ -194,7 +213,11 @@ private fun CaptureContent(
     // di layar disembunyikan total (Mobile kamera eksternal: capture dipicu lewat
     // tombol fisik di kamera, bukan lewat app).
     showShutterButton: Boolean,
-    onShutterClick: () -> Unit
+    onShutterClick: () -> Unit,
+    // <-- BARU: dipakai supaya tombol shutter pakai logo & warna yang SAMA
+    // dengan tombol "Mulai" di HomeScreen (lihat komentar di tombol shutter
+    // di bawah).
+    appearance: AppearanceSettings
 ) {
     // Split-screen: kiri ~30% preview frame (frame + foto yang sudah terisi),
     // kanan ~70% live view kamera + kontrol capture (countdown, slot, shutter).
@@ -274,24 +297,41 @@ private fun CaptureContent(
             // Tombol shutter — bulat, di bawah tengah. Cuma tampil kalau capture
             // dipicu lewat app (software trigger); Mobile kamera eksternal pakai
             // tombol fisik di kamera, jadi tidak butuh tombol ini sama sekali.
+            //
+            // <-- BERUBAH: tampilannya SEKARANG DISAMAKAN dengan tombol "Mulai"
+            // di HomeScreen — logo kamera yang sama (ic_start_camera_logo),
+            // di-tint & diukur pakai setting yang sama
+            // (appearance.startButtonIconColorArgb / startButtonSizeDp), tanpa
+            // latar lingkaran solid seperti sebelumnya. Selagi isCapturing/
+            // isProcessing, tombolnya otomatis meredup (mengikuti `enabled`)
+            // dan label kecil di bawah logo menjelaskan statusnya.
             if (showShutterButton) {
-                Button(
-                    onClick = onShutterClick,
-                    enabled = countdownValue == null && !isCapturing && !isProcessing,
-                    shape = CircleShape,
+                val shutterSize = appearance.startButtonSizeDp.dp
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = 32.dp)
-                        .size(80.dp)
                 ) {
-                    Text(
-                        text = when {
-                            isProcessing -> "💾" // masih nyimpen foto sebelumnya di background
-                            isCapturing -> "..."
-                            else -> "📷"
-                        },
-                        style = MaterialTheme.typography.headlineMedium
-                    )
+                    IconButton(
+                        onClick = onShutterClick,
+                        enabled = countdownValue == null && !isCapturing && !isProcessing,
+                        modifier = Modifier.size(shutterSize)
+                    ) {
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_start_camera_logo),
+                            contentDescription = "Ambil Foto",
+                            tint = Color(appearance.startButtonIconColorArgb),
+                            modifier = Modifier.size(shutterSize)
+                        )
+                    }
+                    if (isProcessing || isCapturing) {
+                        Text(
+                            text = if (isProcessing) "💾 Menyimpan..." else "...",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color.White
+                        )
+                    }
                 }
             }
         }

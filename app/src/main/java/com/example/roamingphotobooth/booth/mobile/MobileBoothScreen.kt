@@ -3,6 +3,7 @@ package com.example.roamingphotobooth.booth.mobile
 import android.graphics.Bitmap
 import androidx.compose.runtime.Composable
 import com.example.roamingphotobooth.booth.stand.StandBoothScreen
+import com.example.roamingphotobooth.settings.AppearanceSettings
 
 /**
  * Layar booth mode MOBILE.
@@ -58,7 +59,11 @@ fun MobileBoothScreen(
     // false/no-op supaya alur Mobile normal (kamera eksternal, tombol fisik) tidak
     // menampilkan tombol apa pun di layar.
     showDeviceCameraShutter: Boolean = false,
-    onDeviceCameraShutterClick: () -> Unit = {}
+    onDeviceCameraShutterClick: () -> Unit = {},
+    // <-- BARU: diteruskan apa adanya ke StandBoothScreen -- dipakai untuk
+    // tombol shutter (tampilan disamakan dengan tombol Mulai) & kontrol
+    // tampil/sembunyi kotak status (lihat AppearanceSettings.showStatusText).
+    appearance: AppearanceSettings = AppearanceSettings()
 ) {
     StandBoothScreen(
         status = status,
@@ -81,6 +86,7 @@ fun MobileBoothScreen(
         onAcceptClick = onAcceptClick,
         showShutterButton = showDeviceCameraShutter,
         showSettingsButton = true,
-        onSettingsClick = onSettingsClick
+        onSettingsClick = onSettingsClick,
+        appearance = appearance
     )
 }

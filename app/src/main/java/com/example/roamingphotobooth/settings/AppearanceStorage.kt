@@ -30,7 +30,8 @@ class AppearanceStorage(context: Context) {
                 KEY_USE_LIVE_VIEW_HOME_BG,
                 default.useLiveViewAsHomeBackground
             ),
-            homeOverlayImagePath = prefs.getString(KEY_HOME_OVERLAY_PATH, null)
+            homeOverlayImagePath = prefs.getString(KEY_HOME_OVERLAY_PATH, null),
+            showStatusText = prefs.getBoolean(KEY_SHOW_STATUS_TEXT, default.showStatusText)
         )
     }
 
@@ -47,6 +48,7 @@ class AppearanceStorage(context: Context) {
             .putFloat(KEY_START_BUTTON_OFFSET_Y, settings.startButtonOffsetYDp)
             .putBoolean(KEY_USE_LIVE_VIEW_HOME_BG, settings.useLiveViewAsHomeBackground)
             .putString(KEY_HOME_OVERLAY_PATH, settings.homeOverlayImagePath)
+            .putBoolean(KEY_SHOW_STATUS_TEXT, settings.showStatusText)
             .apply()
     }
 
@@ -62,5 +64,6 @@ class AppearanceStorage(context: Context) {
         private const val KEY_START_BUTTON_OFFSET_Y = "start_button_offset_y_dp"
         private const val KEY_USE_LIVE_VIEW_HOME_BG = "use_live_view_home_bg"
         private const val KEY_HOME_OVERLAY_PATH = "home_overlay_path"
+        private const val KEY_SHOW_STATUS_TEXT = "show_status_text"
     }
 }

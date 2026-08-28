@@ -61,7 +61,14 @@ data class AppearanceSettings(
     // [MediaFileManager], sama seperti [homeBackground]) yang digambar DI ATAS
     // background Home (baik live view maupun gambar/video statis) -- mis.
     // logo event atau bingkai dekoratif. Null berarti tidak ada overlay.
-    val homeOverlayImagePath: String? = null
+    val homeOverlayImagePath: String? = null,
+
+    // <-- BARU: kalau true (default), kotak status ("Menunggu kamera...",
+    // progres foto, error, dll -- lihat StandBoothScreen) tetap tampil di
+    // pojok kiri atas selama sesi foto. Kalau false, kotak status itu
+    // disembunyikan total. Diatur lewat switch "Tampilkan Status Text" di
+    // Settings > Appearance (lihat AppearanceScreen).
+    val showStatusText: Boolean = true
 ) {
     companion object {
         const val DEFAULT_BUTTON_COLOR = 0xFF4DD0E1.toInt()

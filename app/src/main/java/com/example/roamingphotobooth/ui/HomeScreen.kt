@@ -11,8 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,15 +65,19 @@ fun HomeScreen(
         )
 
         // Logo/tombol setting — pojok kiri atas, masuk ke pengaturan frame.
+        // <-- BERUBAH: dulu emoji "⚙️", sekarang diseragamkan pakai logo
+        // setting yang sama di seluruh app (lihat res/drawable/ic_settings_logo.xml
+        // & StandBoothScreen, yang juga memakai ikon yang sama).
         IconButton(
             onClick = onSettingsClick,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(16.dp)
         ) {
-            Text(
-                text = "⚙️",
-                style = MaterialTheme.typography.headlineSmall
+            Icon(
+                painter = painterResource(id = R.drawable.ic_settings_logo),
+                contentDescription = "Pengaturan",
+                tint = Color.White
             )
         }
 
