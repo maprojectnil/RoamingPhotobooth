@@ -4,11 +4,11 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoLibrary
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -17,7 +17,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import com.example.roamingphotobooth.R
 import com.example.roamingphotobooth.settings.AppearanceSettings
 import com.example.roamingphotobooth.settings.BackgroundLayer
 
@@ -115,16 +117,33 @@ fun HomeScreen(
             )
         }
 
-        // Tombol Mulai — tengah layar
-        Button(
+        // Tombol Mulai — tengah layar (bisa digeser lewat offset X/Y di
+        // bawah). Berupa logo kamera SVG/vector (ic_start_camera_logo, lihat
+        // res/drawable) yang di-tint memakai appearance.startButtonIconColorArgb,
+        // bukan tombol teks lagi (lihat komentar di
+        // AppearanceSettings.startButtonIconColorArgb).
+        //
+        // <-- BARU: ukuran & posisi sekarang bisa diatur user lewat Settings >
+        // Appearance (lihat AppearanceSettings.startButtonSizeDp/
+        // startButtonOffsetXDp/startButtonOffsetYDp) alih-alih angka tetap.
+        // Posisi = pergeseran dari titik tengah layar (Alignment.Center);
+        // (0f, 0f) artinya tetap persis di tengah seperti sebelumnya.
+        val startButtonSize = appearance.startButtonSizeDp.dp
+        IconButton(
             onClick = onMulaiClick,
-            colors = ButtonDefaults.buttonColors(containerColor = Color(appearance.buttonColorArgb)),
-            modifier = Modifier.align(Alignment.Center)
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(
+                    x = appearance.startButtonOffsetXDp.dp,
+                    y = appearance.startButtonOffsetYDp.dp
+                )
+                .size(startButtonSize)
         ) {
-            Text(
-                text = appearance.startButtonText,
-                style = MaterialTheme.typography.headlineSmall,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            Icon(
+                painter = painterResource(id = R.drawable.ic_start_camera_logo),
+                contentDescription = appearance.startButtonText,
+                tint = Color(appearance.startButtonIconColorArgb),
+                modifier = Modifier.size(startButtonSize)
             )
         }
     }

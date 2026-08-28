@@ -32,6 +32,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -46,6 +48,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 /**
  * Layar Appearance: atur background Home (gambar/video dari galeri, ATAU
@@ -183,6 +186,63 @@ fun AppearanceScreen(
                     colorArgb = settings.startButtonIconColorArgb,
                     onColorChange = { settings = settings.copy(startButtonIconColorArgb = it) }
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+        // <-- BARU: ukuran & posisi tombol Mulai (lihat ui.HomeScreen --
+        // dipakai untuk Modifier.size() & Modifier.offset() pada logo kamera
+        // di tengah layar Home). Posisi berupa geseran dari titik tengah,
+        // bukan koordinat absolut, supaya tetap wajar di ukuran layar apa pun.
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF262A33))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                Text(
+                    text = "Ukuran & Posisi Tombol Mulai",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White
+                )
+                SliderSettingRow(
+                    label = "Ukuran Logo",
+                    valueText = "${settings.startButtonSizeDp.roundToInt()} dp",
+                    value = settings.startButtonSizeDp,
+                    valueRange = AppearanceSettings.MIN_START_BUTTON_SIZE_DP..AppearanceSettings.MAX_START_BUTTON_SIZE_DP,
+                    onValueChange = { settings = settings.copy(startButtonSizeDp = it) }
+                )
+                SliderSettingRow(
+                    label = "Posisi Horizontal (kiri \u2194 kanan)",
+                    valueText = "${settings.startButtonOffsetXDp.roundToInt()} dp",
+                    value = settings.startButtonOffsetXDp,
+                    valueRange = -AppearanceSettings.MAX_START_BUTTON_OFFSET_X_DP..AppearanceSettings.MAX_START_BUTTON_OFFSET_X_DP,
+                    onValueChange = { settings = settings.copy(startButtonOffsetXDp = it) }
+                )
+                SliderSettingRow(
+                    label = "Posisi Vertikal (atas \u2194 bawah)",
+                    valueText = "${settings.startButtonOffsetYDp.roundToInt()} dp",
+                    value = settings.startButtonOffsetYDp,
+                    valueRange = -AppearanceSettings.MAX_START_BUTTON_OFFSET_Y_DP..AppearanceSettings.MAX_START_BUTTON_OFFSET_Y_DP,
+                    onValueChange = { settings = settings.copy(startButtonOffsetYDp = it) }
+                )
+                OutlinedButton(
+                    onClick = {
+                        settings = settings.copy(
+                            startButtonSizeDp = AppearanceSettings.DEFAULT_START_BUTTON_SIZE_DP,
+                            startButtonOffsetXDp = 0f,
+                            startButtonOffsetYDp = 0f
+                        )
+                    },
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text("Reset ke Tengah")
+                }
             }
         }
 
@@ -435,6 +495,49 @@ private fun AppearanceToggleCard(
                 colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFF4DD0E1))
             )
         }
+    }
+}
+
+/**
+ * <-- BARU: baris label + nilai saat ini + slider, dipakai untuk 3 pengaturan
+ * ukuran/posisi tombol Mulai (lihat kartu "Ukuran & Posisi Tombol Mulai" di
+ * [AppearanceScreen]). [value]/[onValueChange] dalam Float (dp) karena
+ * [Slider] material3 hanya bekerja dengan Float.
+ */
+@Composable
+private fun SliderSettingRow(
+    label: String,
+    valueText: String,
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    onValueChange: (Float) -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White
+            )
+            Text(
+                text = valueText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(0xFF9AA0AC)
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = SliderDefaults.colors(
+                thumbColor = Color(0xFF4DD0E1),
+                activeTrackColor = Color(0xFF4DD0E1),
+                inactiveTrackColor = Color(0x40FFFFFF)
+            )
+        )
     }
 }
 

@@ -23,6 +23,9 @@ class AppearanceStorage(context: Context) {
             accentColorArgb = prefs.getInt(KEY_ACCENT_COLOR, default.accentColorArgb),
             startButtonText = prefs.getString(KEY_START_TEXT, default.startButtonText) ?: default.startButtonText,
             startButtonIconColorArgb = prefs.getInt(KEY_START_ICON_COLOR, default.startButtonIconColorArgb),
+            startButtonSizeDp = prefs.getFloat(KEY_START_BUTTON_SIZE, default.startButtonSizeDp),
+            startButtonOffsetXDp = prefs.getFloat(KEY_START_BUTTON_OFFSET_X, default.startButtonOffsetXDp),
+            startButtonOffsetYDp = prefs.getFloat(KEY_START_BUTTON_OFFSET_Y, default.startButtonOffsetYDp),
             useLiveViewAsHomeBackground = prefs.getBoolean(
                 KEY_USE_LIVE_VIEW_HOME_BG,
                 default.useLiveViewAsHomeBackground
@@ -39,6 +42,9 @@ class AppearanceStorage(context: Context) {
             .putInt(KEY_ACCENT_COLOR, settings.accentColorArgb)
             .putString(KEY_START_TEXT, settings.startButtonText)
             .putInt(KEY_START_ICON_COLOR, settings.startButtonIconColorArgb)
+            .putFloat(KEY_START_BUTTON_SIZE, settings.startButtonSizeDp)
+            .putFloat(KEY_START_BUTTON_OFFSET_X, settings.startButtonOffsetXDp)
+            .putFloat(KEY_START_BUTTON_OFFSET_Y, settings.startButtonOffsetYDp)
             .putBoolean(KEY_USE_LIVE_VIEW_HOME_BG, settings.useLiveViewAsHomeBackground)
             .putString(KEY_HOME_OVERLAY_PATH, settings.homeOverlayImagePath)
             .apply()
@@ -51,6 +57,9 @@ class AppearanceStorage(context: Context) {
         private const val KEY_ACCENT_COLOR = "accent_color"
         private const val KEY_START_TEXT = "start_button_text"
         private const val KEY_START_ICON_COLOR = "start_button_icon_color"
+        private const val KEY_START_BUTTON_SIZE = "start_button_size_dp"
+        private const val KEY_START_BUTTON_OFFSET_X = "start_button_offset_x_dp"
+        private const val KEY_START_BUTTON_OFFSET_Y = "start_button_offset_y_dp"
         private const val KEY_USE_LIVE_VIEW_HOME_BG = "use_live_view_home_bg"
         private const val KEY_HOME_OVERLAY_PATH = "home_overlay_path"
     }
