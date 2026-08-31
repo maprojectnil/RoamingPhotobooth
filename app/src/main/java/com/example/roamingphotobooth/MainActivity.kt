@@ -653,7 +653,7 @@ class MainActivity : ComponentActivity() {
                 if (frameBmp != null) {
                     val finalImage = templateSess.buildFinalImage(frameBmp)
                     if (finalImage != null) {
-                        val savedUri = saveMergedBitmap(finalImage)
+                        val savedUri = saveMergedBitmap(finalImage, templateSess)
                         runOnUiThread {
                             statusText.value = "✅ SEMUA FOTO SELESAI! Tersimpan: $savedUri"
                             // QR sudah di-set instan di dalam saveMergedBitmap() di atas -- JANGAN
@@ -955,7 +955,7 @@ class MainActivity : ComponentActivity() {
             if (session.isComplete && frameBmp != null) {
                 finalImage = session.buildFinalImage(frameBmp) // compose bitmap, berat -> background
                 if (finalImage != null) {
-                    savedName = saveMergedBitmap(finalImage) // JPEG compress + I/O disk -> background
+                    savedName = saveMergedBitmap(finalImage, session) // JPEG compress + I/O disk -> background
                 }
             }
 
@@ -1002,7 +1002,10 @@ class MainActivity : ComponentActivity() {
         return frame
     }
 
-    private fun saveMergedBitmap(bitmap: Bitmap): String {
+    private fun saveMergedBitmap(
+        bitmap: Bitmap,
+        templateSess: com.example.roamingphotobooth.template.TemplateSessionManager? = null
+    ): String {
         val fileName = "photobooth_${System.currentTimeMillis()}.jpg"
         val jpegBytes = java.io.ByteArrayOutputStream().use { baos ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, 92, baos)
@@ -1054,23 +1057,132 @@ class MainActivity : ComponentActivity() {
         val cacheFile = java.io.File(cacheDir, "upload_$slug.jpg")
         cacheFile.writeBytes(jpegBytes)
 
-        enqueueDriveUpload(slug, fileName, cacheFile.absolutePath)
+        // <-- BARU: nama subfolder sesi ini di Drive, dipakai kalau setting "Folder
+        // Terpisah per Sesi" (Settings > Session) ON -- lihat DriveUploadWorker.doWork().
+        // Format: "Sesi_yyyy-MM-dd_HH-mm-ss" (waktu foto selesai) + 8 karakter awal
+        // slug supaya tetap unik sekalipun ada 2 sesi selesai persis di detik yang
+        // sama. Dibuat SEKALI di sini (bukan di worker) supaya namanya tetap SAMA
+        // walau job ini di-retry oleh WorkManager -- lihat resolveSessionFolderId()
+        // yang cari-dulu-baru-bikin berdasar nama ini, jadi tidak akan dobel folder.
+        // Nama yang SAMA ini juga dipakai buat upload foto-foto mentah per-slot di
+        // bawah, supaya semuanya (hasil merge + semua foto mentah) masuk ke SATU
+        // folder sesi yang sama persis.
+        val sessionFolderName = "Sesi_" +
+            java.text.SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", java.util.Locale.getDefault())
+                .format(java.util.Date()) + "_" + slug.take(8)
+
+        // <-- BARU: kalau setting "Folder Terpisah per Sesi" ON dan ada sesi template
+        // (bukan alur fallback tanpa template), ikut upload SEMUA foto mentah per-slot
+        // (belum di-merge/di-frame) ke folder sesi yang SAMA -- supaya QR yang nunjuk
+        // ke folder itu (lihat DriveUploadWorker.doWork) isinya lengkap: foto hasil
+        // akhir + foto asli tiap slot, bukan cuma hasil merge saja.
+        //
+        // PENTING soal urutan: kalau ada foto mentah yang ikut diupload, job-nya
+        // DIRANTAI (chain) di belakang job upload foto hasil merge -- BUKAN dijalankan
+        // paralel begitu saja. Alasannya: folder sesi dibuat lewat cari-dulu-baru-bikin
+        // (lihat DriveUploader.resolveSessionFolderId), yang TIDAK atomic. Kalau semua
+        // job jalan bersamaan, beberapa job bisa sama-sama "belum ketemu folder" lalu
+        // sama-sama bikin folder baru -> folder sesi jadi DOBEL. Dengan dirantai, job
+        // foto hasil merge (jalan duluan) yang bikin foldernya, baru job-job foto mentah
+        // menyusul (mereka tinggal nemu folder yang sudah ada).
+        val rawSlotUploads = if (templateSess != null && sessionSettingsStorage.load().createSessionFolder) {
+            buildRawSlotUploadRequests(templateSess, sessionFolderName)
+        } else {
+            emptyList()
+        }
+        enqueueDriveUpload(slug, fileName, cacheFile.absolutePath, sessionFolderName, chainedAfter = rawSlotUploads)
 
         return fileName
+    }
+
+    /**
+     * <-- BARU: siapkan (belum di-enqueue) WorkRequest upload utk tiap foto MENTAH
+     * (per-slot, belum di-merge) yang bakal masuk ke folder sesi yang sama dengan
+     * foto hasil merge (lihat saveMergedBitmap). Dipanggil HANYA kalau setting
+     * "Folder Terpisah per Sesi" ON -- kalau OFF, foto mentah ini TIDAK diupload
+     * sama sekali (behavior lama: cuma hasil merge yang diupload).
+     *
+     * Tiap foto mentah dapat slug sendiri (buat unique-work-key WorkManager & nama
+     * file cache) tapi TIDAK di-track statusnya di Firestore (skipStatusTracking=true,
+     * lihat DriveUploadWorker) -- yang di-track cuma status foto hasil merge, karena
+     * itu satu-satunya yang landing page-nya ditunggu/di-scan user.
+     *
+     * Request-request ini TIDAK langsung di-enqueue di sini -- caller (saveMergedBitmap)
+     * yang merantainya di BELAKANG job upload foto hasil merge lewat
+     * enqueueDriveUpload(..., chainedAfter = ...), supaya folder sesi sudah pasti ada
+     * duluan sebelum job-job ini jalan (lihat komentar di saveMergedBitmap).
+     */
+    private fun buildRawSlotUploadRequests(
+        templateSess: com.example.roamingphotobooth.template.TemplateSessionManager,
+        sessionFolderName: String
+    ): List<androidx.work.OneTimeWorkRequest> {
+        val timestamp = System.currentTimeMillis()
+        return templateSess.capturedPhotosSnapshot().map { (slotOrder, rawBitmap) ->
+            val rawSlug = com.example.roamingphotobooth.status.SlugGenerator.newSlug()
+            val rawFileName = "photobooth_${timestamp}_slot$slotOrder.jpg"
+            val rawJpegBytes = java.io.ByteArrayOutputStream().use { baos ->
+                rawBitmap.compress(Bitmap.CompressFormat.JPEG, 92, baos)
+                baos.toByteArray()
+            }
+            val rawCacheFile = java.io.File(cacheDir, "upload_$rawSlug.jpg")
+            rawCacheFile.writeBytes(rawJpegBytes)
+
+            buildDriveUploadRequest(
+                slug = rawSlug,
+                fileName = rawFileName,
+                filePath = rawCacheFile.absolutePath,
+                sessionFolderName = sessionFolderName,
+                skipStatusTracking = true
+            )
+        }
     }
 
     /**
      * Enqueue job upload ke Drive lewat WorkManager: retry otomatis dengan
      * backoff eksponensial, dan nunggu sampai ada koneksi internet kalau lagi
      * offline (constraint NetworkType.CONNECTED) -- tidak perlu polling manual.
-     * unique work key = slug, supaya foto yang sama tidak ke-enqueue dobel.
+     *
+     * @param chainedAfter kalau tidak kosong (lihat saveMergedBitmap), request-request
+     *   ini DIRANTAI supaya jalan SETELAH job utama ([slug]) selesai -- dipakai supaya
+     *   job upload foto mentah per-slot menunggu job foto hasil merge selesai bikin
+     *   folder sesi dulu, mencegah folder dobel (lihat komentar di saveMergedBitmap).
+     *   Kalau kosong, job utama di-enqueue sendirian seperti biasa (unique work key
+     *   = slug, supaya foto yang sama tidak ke-enqueue dobel).
      */
-    private fun enqueueDriveUpload(slug: String, fileName: String, filePath: String) {
+    private fun enqueueDriveUpload(
+        slug: String,
+        fileName: String,
+        filePath: String,
+        sessionFolderName: String,
+        chainedAfter: List<androidx.work.OneTimeWorkRequest> = emptyList()
+    ) {
+        val request = buildDriveUploadRequest(slug, fileName, filePath, sessionFolderName)
+
+        val workManager = androidx.work.WorkManager.getInstance(applicationContext)
+        if (chainedAfter.isEmpty()) {
+            workManager.enqueueUniqueWork(slug, androidx.work.ExistingWorkPolicy.KEEP, request)
+        } else {
+            // unique work key = nama folder sesi (bukan slug) -- ini SATU chain utuh
+            // (foto hasil merge -> semua foto mentah) yang mewakili 1 sesi foto.
+            workManager.beginUniqueWork(sessionFolderName, androidx.work.ExistingWorkPolicy.KEEP, request)
+                .then(chainedAfter)
+                .enqueue()
+        }
+    }
+
+    /** Builder murni: bikin OneTimeWorkRequest upload, TIDAK langsung di-enqueue. */
+    private fun buildDriveUploadRequest(
+        slug: String,
+        fileName: String,
+        filePath: String,
+        sessionFolderName: String,
+        skipStatusTracking: Boolean = false
+    ): androidx.work.OneTimeWorkRequest {
         val constraints = androidx.work.Constraints.Builder()
             .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
             .build()
 
-        val request = androidx.work.OneTimeWorkRequestBuilder<com.example.roamingphotobooth.work.DriveUploadWorker>()
+        return androidx.work.OneTimeWorkRequestBuilder<com.example.roamingphotobooth.work.DriveUploadWorker>()
             .setConstraints(constraints)
             .setBackoffCriteria(
                 androidx.work.BackoffPolicy.EXPONENTIAL,
@@ -1078,12 +1190,11 @@ class MainActivity : ComponentActivity() {
                 java.util.concurrent.TimeUnit.MILLISECONDS
             )
             .setInputData(
-                com.example.roamingphotobooth.work.buildUploadInputData(slug, fileName, filePath)
+                com.example.roamingphotobooth.work.buildUploadInputData(
+                    slug, fileName, filePath, sessionFolderName, skipStatusTracking
+                )
             )
             .build()
-
-        androidx.work.WorkManager.getInstance(applicationContext)
-            .enqueueUniqueWork(slug, androidx.work.ExistingWorkPolicy.KEEP, request)
     }
 
     private fun loadFrameFromAssets(fileName: String): Bitmap? {

@@ -23,12 +23,18 @@ class DriveUploader(
      */
     data class UploadResult(val fileId: String, val shareUrl: String)
 
-    fun uploadBytes(fileName: String, jpegBytes: ByteArray): UploadResult {
+    /**
+     * @param parentFolderId folder tujuan upload. Default [folderId] (folder dasar
+     *   yang sudah diatur lewat Settings/gradle.properties). Isi dengan id folder
+     *   sesi (lihat [resolveSessionFolderId]) kalau foto ini mau masuk ke subfolder
+     *   sesi, bukan langsung ke folder dasar.
+     */
+    fun uploadBytes(fileName: String, jpegBytes: ByteArray, parentFolderId: String = folderId): UploadResult {
         val accessToken = auth.fetchAccessToken()
 
         val metadata = JSONObject().apply {
             put("name", fileName)
-            put("parents", JSONArray().put(folderId))
+            put("parents", JSONArray().put(parentFolderId))
         }
 
         val boundary = "----RoamingPhotobooth${UUID.randomUUID()}"
@@ -71,13 +77,101 @@ class DriveUploader(
         return UploadResult(fileId, shareUrl)
     }
 
+    /**
+     * Cari subfolder bernama [sessionFolderName] di dalam folder dasar ([folderId]).
+     * Kalau belum ada, buat baru. Kalau sudah ada (mis. worker ini di-retry setelah
+     * folder sempat berhasil dibuat sebelumnya), pakai ulang id yang sama -> TIDAK
+     * bikin folder duplikat tiap kali WorkManager retry upload yang gagal.
+     *
+     * BLOCKING -> panggil dari Dispatchers.IO, sama seperti [uploadBytes].
+     */
+    fun resolveSessionFolderId(sessionFolderName: String): String {
+        val accessToken = auth.fetchAccessToken()
+        return findFolderByName(sessionFolderName, accessToken)
+            ?: createFolder(sessionFolderName, accessToken)
+    }
+
+    private fun findFolderByName(name: String, accessToken: String): String? {
+        // Escape ' dan \ di nama folder supaya tidak merusak query Drive (lihat
+        // https://developers.google.com/drive/api/guides/search-files).
+        val escapedName = name.replace("\\", "\\\\").replace("'", "\\'")
+        val query = "mimeType='application/vnd.google-apps.folder' and trashed=false " +
+            "and name='$escapedName' and '$folderId' in parents"
+        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+        val url = URL(
+            "https://www.googleapis.com/drive/v3/files?q=$encodedQuery" +
+                "&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true"
+        )
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+
+        val code = conn.responseCode
+        val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader().readText()
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            throw RuntimeException("Cek folder sesi di Drive gagal ($code): $text")
+        }
+        val files = JSONObject(text).optJSONArray("files") ?: JSONArray()
+        return if (files.length() > 0) files.getJSONObject(0).getString("id") else null
+    }
+
+    private fun createFolder(name: String, accessToken: String): String {
+        val metadata = JSONObject().apply {
+            put("name", name)
+            put("mimeType", "application/vnd.google-apps.folder")
+            put("parents", JSONArray().put(folderId))
+        }
+        val url = URL("https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer $accessToken")
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        }
+        conn.outputStream.use { it.write(metadata.toString().toByteArray()) }
+
+        val code = conn.responseCode
+        val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            .bufferedReader().readText()
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            throw RuntimeException("Bikin folder sesi di Drive gagal ($code): $text")
+        }
+        return JSONObject(text).getString("id")
+    }
+
+    /**
+     * Set permission folder (BUKAN file) supaya bisa dibuka siapa saja lewat link,
+     * sama seperti yang otomatis terjadi ke tiap file lewat [uploadBytes]. Dipanggil
+     * manual dari DriveUploadWorker untuk folder SESI, supaya link folder yang
+     * ditampilkan di landing page (saat "Folder Terpisah per Sesi" ON) bisa dibuka
+     * tanpa perlu login akun Drive.
+     *
+     * Sama seperti [makePubliclyViewable] internal: kalau gagal, tidak di-throw
+     * (cuma di-log) -- foto/folder tetap aman tersimpan, cuma link publiknya yang
+     * belum tentu jalan (mis. dibatasi kebijakan organisasi).
+     */
+    fun makePubliclyViewable(id: String) {
+        val accessToken = auth.fetchAccessToken()
+        setPublicReaderPermission(id, accessToken)
+    }
+
     private fun makePubliclyViewable(fileId: String, accessToken: String) {
+        setPublicReaderPermission(fileId, accessToken)
+    }
+
+    private fun setPublicReaderPermission(id: String, accessToken: String) {
         try {
             val body = JSONObject().apply {
                 put("role", "reader")
                 put("type", "anyone")
             }
-            val url = URL("https://www.googleapis.com/drive/v3/files/$fileId/permissions?supportsAllDrives=true")
+            val url = URL("https://www.googleapis.com/drive/v3/files/$id/permissions?supportsAllDrives=true")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 doOutput = true
@@ -92,10 +186,10 @@ class DriveUploader(
             conn.disconnect()
 
             if (code !in 200..299) {
-                Log.w("DriveUploader", "Gagal set permission publik utk $fileId ($code): $text")
+                Log.w("DriveUploader", "Gagal set permission publik utk $id ($code): $text")
             }
         } catch (e: Exception) {
-            Log.w("DriveUploader", "Gagal set permission publik utk $fileId", e)
+            Log.w("DriveUploader", "Gagal set permission publik utk $id", e)
         }
     }
 }

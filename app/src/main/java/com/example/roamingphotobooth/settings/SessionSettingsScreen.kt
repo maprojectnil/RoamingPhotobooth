@@ -174,6 +174,18 @@ fun SessionSettingsScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+        SessionToggleCard(
+            title = "Folder Terpisah per Sesi",
+            description = "ON: tiap sesi foto otomatis dapat subfolder sendiri di dalam " +
+                "Folder ID di atas (mis. \"Sesi_2026-08-31_14-05-30\"), berisi foto hasil " +
+                "akhir + semua foto asli per-slot. QR yang ditampilkan akan membuka folder " +
+                "ini (bukan cuma 1 file foto). OFF: semua foto hasil akhir tetap masuk " +
+                "langsung ke folder yang sama seperti sebelumnya, dan QR membuka file itu saja.",
+            checked = settings.createSessionFolder,
+            onCheckedChange = { settings = settings.copy(createSessionFolder = it) }
+        )
+
         Spacer(modifier = Modifier.height(28.dp))
         Button(
             onClick = { onSave(settings) },

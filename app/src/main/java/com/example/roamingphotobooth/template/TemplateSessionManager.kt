@@ -97,6 +97,20 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
         return AddPhotoResult.ADDED
     }
 
+    /**
+     * <-- BARU: snapshot foto MENTAH (belum di-merge/di-frame) per slot, urut
+     * berdasar nomor slot. Dipakai MainActivity untuk ikut upload semua foto
+     * mentah ini ke folder sesi di Drive (saat setting "Folder Terpisah per Sesi"
+     * ON) -- supaya folder sesi isinya bukan cuma 1 foto hasil merge, tapi juga
+     * foto asli tiap slot yang bisa dipilih ulang/dicetak terpisah oleh tamu.
+     * Bitmap yang dikembalikan MASIH dipegang oleh [capturedPhotos] (tidak
+     * di-recycle di sini) -- caller cuma boleh BACA (encode ke JPEG dsb), jangan
+     * di-recycle sendiri, karena masih dipakai composite berikutnya sampai
+     * [reset] dipanggil.
+     */
+    fun capturedPhotosSnapshot(): List<Pair<Int, Bitmap>> =
+        capturedPhotos.toSortedMap().map { (order, bitmap) -> order to bitmap }
+
     fun reset() {
         capturedPhotos.values.forEach { it.recycle() }
         capturedPhotos.clear()

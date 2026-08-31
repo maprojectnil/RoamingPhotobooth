@@ -40,6 +40,14 @@ class DriveUploadWorker(
         const val KEY_SLUG = "slug"
         const val KEY_FILE_NAME = "file_name"
         const val KEY_FILE_PATH = "file_path"
+        const val KEY_SESSION_FOLDER_NAME = "session_folder_name"
+        // <-- BARU: true untuk upload foto MENTAH (belum di-merge, 1 per slot) yang
+        // ikut diupload ke folder sesi saat "Folder Terpisah per Sesi" ON -- lihat
+        // MainActivity.enqueueRawSlotUploads(). Foto-foto ini TIDAK punya slug/QR
+        // sendiri dan TIDAK perlu tracking status di Firestore (yang di-track cuma
+        // status foto hasil merge, karena itu yang landing page-nya ditunggu user).
+        // WorkManager tetap urus retry/offline-nya sama seperti upload foto utama.
+        const val KEY_SKIP_STATUS_TRACKING = "skip_status_tracking"
         private const val MAX_ATTEMPTS = 8
         private const val TAG = "DriveUploadWorker"
     }
@@ -48,6 +56,7 @@ class DriveUploadWorker(
         val slug = inputData.getString(KEY_SLUG) ?: return@withContext Result.failure()
         val fileName = inputData.getString(KEY_FILE_NAME) ?: return@withContext Result.failure()
         val filePath = inputData.getString(KEY_FILE_PATH) ?: return@withContext Result.failure()
+        val skipStatusTracking = inputData.getBoolean(KEY_SKIP_STATUS_TRACKING, false)
         val file = File(filePath)
 
         val statusRepo = PhotoStatusRepository(
@@ -58,13 +67,18 @@ class DriveUploadWorker(
         if (!file.exists()) {
             // File lokal sudah hilang (mis. cache dibersihkan) -> tidak ada yang bisa
             // di-retry lagi, tandai gagal permanen supaya landing page tidak nge-hang
-            // di status "uploading" selamanya.
-            runCatching { statusRepo.markFailed(slug, "File lokal tidak ditemukan") }
+            // di status "uploading" selamanya. Dilewati untuk foto mentah (lihat
+            // KEY_SKIP_STATUS_TRACKING) karena tidak ada dokumen Firestore utk itu.
+            if (!skipStatusTracking) {
+                runCatching { statusRepo.markFailed(slug, "File lokal tidak ditemukan") }
+            }
             return@withContext Result.failure()
         }
 
         try {
-            statusRepo.markUploading(slug, fileName, runAttemptCount + 1)
+            if (!skipStatusTracking) {
+                statusRepo.markUploading(slug, fileName, runAttemptCount + 1)
+            }
 
             val driveAuth = DriveAuth(
                 clientId = BuildConfig.DRIVE_OAUTH_CLIENT_ID,
@@ -73,10 +87,45 @@ class DriveUploadWorker(
             )
             val uploader = DriveUploader(driveAuth, resolveDriveFolderId())
 
-            val jpegBytes = file.readBytes()
-            val result = uploader.uploadBytes(fileName, jpegBytes)
+            // <-- BARU: kalau setting "Folder Terpisah per Sesi" ON dan nama folder
+            // sesinya ada (lihat MainActivity.saveMergedBitmap), cari-atau-buat
+            // subfolder sesi itu dulu di dalam folder dasar, lalu upload foto ke
+            // situ. Dicek ULANG tiap kali doWork() jalan (bukan cuma sekali) supaya
+            // kalau job ini di-retry setelah user sempat ganti setting, upload
+            // berikutnya ikut setting yang PALING BARU -- sama seperti resolveDriveFolderId().
+            val sessionFolderName = inputData.getString(KEY_SESSION_FOLDER_NAME)
+            val createSessionFolder = SessionSettingsStorage(applicationContext).load().createSessionFolder
+            val sessionFolderId = if (createSessionFolder && !sessionFolderName.isNullOrBlank()) {
+                uploader.resolveSessionFolderId(sessionFolderName)
+            } else {
+                null
+            }
 
-            statusRepo.markReady(slug, result.shareUrl, result.fileId)
+            val jpegBytes = file.readBytes()
+            val result = if (sessionFolderId != null) {
+                uploader.uploadBytes(fileName, jpegBytes, sessionFolderId)
+            } else {
+                uploader.uploadBytes(fileName, jpegBytes)
+            }
+
+            if (!skipStatusTracking) {
+                if (sessionFolderId != null) {
+                    // <-- BARU: foto ini masuk folder sesi (bukan langsung ke folder
+                    // dasar) -> QR/landing page HARUS nunjuk ke FOLDER itu (isinya foto
+                    // hasil merge + semua foto mentah per-slot, lihat
+                    // MainActivity.enqueueRawSlotUploads yang upload dgn
+                    // skipStatusTracking=true & sessionFolderName yang SAMA), bukan cuma
+                    // link 1 file hasil merge saja. Folder-nya sendiri juga perlu
+                    // di-set publicly viewable secara terpisah -- permission publik yang
+                    // otomatis di-set di uploadBytes() itu cuma utk FILE-nya, bukan folder
+                    // induknya.
+                    uploader.makePubliclyViewable(sessionFolderId)
+                    val folderShareUrl = "https://drive.google.com/drive/folders/$sessionFolderId"
+                    statusRepo.markReady(slug, folderShareUrl, sessionFolderId)
+                } else {
+                    statusRepo.markReady(slug, result.shareUrl, result.fileId)
+                }
+            }
             Log.i(TAG, "Sukses upload $fileName (slug=$slug) -> ${result.fileId}")
 
             // Sudah aman di Drive -> file cache lokal boleh dibuang.
@@ -87,7 +136,9 @@ class DriveUploadWorker(
             Log.w(TAG, "Upload gagal (percobaan ke-${runAttemptCount + 1}) utk $slug", e)
 
             if (runAttemptCount + 1 >= MAX_ATTEMPTS) {
-                runCatching { statusRepo.markFailed(slug, e.message ?: "Upload gagal setelah $MAX_ATTEMPTS percobaan") }
+                if (!skipStatusTracking) {
+                    runCatching { statusRepo.markFailed(slug, e.message ?: "Upload gagal setelah $MAX_ATTEMPTS percobaan") }
+                }
                 Result.failure()
             } else {
                 // Result.retry() -> WorkManager jadwalkan ulang otomatis dengan backoff
@@ -115,10 +166,26 @@ class DriveUploadWorker(
     }
 }
 
-/** Helper bikin Data input work request, dipanggil dari MainActivity. */
-fun buildUploadInputData(slug: String, fileName: String, filePath: String): Data =
+/**
+ * Helper bikin Data input work request, dipanggil dari MainActivity.
+ * @param sessionFolderName nama subfolder sesi (dipakai kalau setting "Folder
+ *   Terpisah per Sesi" ON, lihat [DriveUploadWorker.doWork]). Boleh null kalau
+ *   fitur ini tidak dipakai -- upload tetap jalan langsung ke folder dasar.
+ * @param skipStatusTracking true untuk foto MENTAH (per-slot, belum di-merge) yang
+ *   ikut diupload ke folder sesi -- tidak perlu tracking status Firestore, lihat
+ *   [DriveUploadWorker.KEY_SKIP_STATUS_TRACKING].
+ */
+fun buildUploadInputData(
+    slug: String,
+    fileName: String,
+    filePath: String,
+    sessionFolderName: String? = null,
+    skipStatusTracking: Boolean = false
+): Data =
     Data.Builder()
         .putString(DriveUploadWorker.KEY_SLUG, slug)
         .putString(DriveUploadWorker.KEY_FILE_NAME, fileName)
         .putString(DriveUploadWorker.KEY_FILE_PATH, filePath)
+        .putString(DriveUploadWorker.KEY_SESSION_FOLDER_NAME, sessionFolderName)
+        .putBoolean(DriveUploadWorker.KEY_SKIP_STATUS_TRACKING, skipStatusTracking)
         .build()

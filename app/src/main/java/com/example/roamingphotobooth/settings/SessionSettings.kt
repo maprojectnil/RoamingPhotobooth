@@ -40,7 +40,14 @@ data class SessionSettings(
     // APK. Kosong ("") berarti "pakai default dari gradle.properties saat build"
     // (BuildConfig.DRIVE_FOLDER_ID yang di-embed lewat project property
     // DRIVE_FOLDER_ID) — lihat DriveUploadWorker.resolveDriveFolderId().
-    val driveFolderId: String = ""
+    val driveFolderId: String = "",
+
+    // <-- BARU: kalau ON, tiap sesi foto (1 sesi = 1 foto hasil akhir template)
+    // otomatis dapat SUBFOLDER sendiri di dalam [driveFolderId] (mis. "Sesi_2026-08-31_14-05-30"),
+    // bukan langsung numpuk semua foto rata di folder yang sama. Default false
+    // supaya TIDAK mengubah behavior yang sudah ada sebelum fitur ini ditambahkan
+    // -- lihat DriveUploadWorker.doWork() & MainActivity.saveMergedBitmap().
+    val createSessionFolder: Boolean = false
 ) {
     companion object {
         const val DEFAULT_COUNTDOWN_SECONDS = 3
