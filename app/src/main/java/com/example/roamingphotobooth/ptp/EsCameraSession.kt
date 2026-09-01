@@ -55,6 +55,27 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
         // Kualitas JPEG saat hasil capture (Bitmap dari library) di-encode ulang
         // jadi ByteArray untuk diteruskan ke TemplateSessionManager/BitmapMerger.
         private const val CAPTURE_JPEG_QUALITY = 95
+
+        // <-- BARU: watchdog live view. Kalau app ditinggal idle cukup lama (layar
+        // Android mati sendiri karena screen timeout, sebagian device ikut memotong
+        // daya USB-OTG / membatasi CPU lewat Doze saat itu, dll), loop polling live
+        // view (lihat onLiveViewData di bawah) bisa diam total TANPA ada event
+        // error/detach apa pun dari library -- device dianggap "masih ada" tapi
+        // tidak pernah merespons lagi. Watchdog ini jalan terus di latar belakang,
+        // mendeteksi sendiri kalau tidak ada frame baru dalam beberapa detik, dan
+        // coba pulihkan otomatis -- supaya operator tidak perlu cabut-pasang kabel
+        // kamera atau restart app tiap kali balik dari idle.
+        private const val WATCHDOG_CHECK_INTERVAL_MS = 4_000L
+
+        // Live view idle lebih lama dari ini -> mulai dianggap macet, coba
+        // percobaan "lunak" dulu: re-issue command live view (kemungkinan cuma
+        // polling chain-nya yang berhenti, bukan sesi USB-nya).
+        private const val WATCHDOG_STALE_THRESHOLD_MS = 8_000L
+
+        // Masih idle setelah percobaan lunak berjalan selama ini -> dianggap sesi
+        // USB-nya sendiri yang mati, eskalasi ke reconnect "keras" (buka ulang sesi
+        // PTP dari awal, cari device kompatibel yang masih attached).
+        private const val WATCHDOG_HARD_RECONNECT_AFTER_MS = 16_000L
     }
 
     private val ptpService: PtpService = PtpService.Singleton.getInstance(context)
@@ -64,6 +85,11 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
     private var liveViewActive = false
     private var currentLiveViewData: LiveViewData? = null
     private var previousLiveViewData: LiveViewData? = null
+
+    // <-- BARU: state watchdog live view (lihat runWatchdogCheck()).
+    private var lastLiveViewFrameAt: Long = 0L
+    private var lastReconnectAttemptAt: Long = 0L
+    private var watchdogCancelled = false
 
     /** Kamera siap dipakai (sesi PTP terbuka) — live view otomatis dimulai setelah ini. */
     override var onSessionReady: (() -> Unit)? = null
@@ -103,6 +129,7 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
     init {
         ptpService.setCameraListener(this)
         registerDetachReceiver()
+        scheduleWatchdogCheck()
     }
 
     private fun registerDetachReceiver() {
@@ -128,6 +155,61 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
         ptpService.initialize(context, intent, true)
     }
 
+    // ============================== Watchdog live view ==============================
+    // Lihat catatan panjang di companion object (WATCHDOG_*) soal kenapa ini ada:
+    // ringkasnya, live view bisa diam total tanpa event error/detach apa pun dari
+    // library kalau app ditinggal idle lama (layar mati sendiri, USB power dipotong
+    // OS, dll). Loop ini jalan terus selama instance ini hidup dan mendeteksi +
+    // memulihkan kondisi itu sendiri.
+
+    private fun scheduleWatchdogCheck() {
+        mainHandler.postDelayed({
+            if (watchdogCancelled) return@postDelayed
+            runWatchdogCheck()
+            scheduleWatchdogCheck()
+        }, WATCHDOG_CHECK_INTERVAL_MS)
+    }
+
+    private fun runWatchdogCheck() {
+        if (!liveViewActive) {
+            // Live view memang belum/tidak aktif (mis. belum ada kamera tersambung,
+            // baru saja detach, atau baru saja di-request reconnect) -- bukan
+            // tanggung jawab watchdog, biarkan alur normal (onCameraStarted /
+            // onDeviceDetached / onError) yang urus.
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        val idleMs = now - lastLiveViewFrameAt
+        if (idleMs < WATCHDOG_STALE_THRESHOLD_MS) return // masih wajar
+
+        // Kasih jeda antar-percobaan reconnect (jangan spam tiap 4 detik selagi
+        // masih menunggu hasil percobaan sebelumnya).
+        if (now - lastReconnectAttemptAt < WATCHDOG_CHECK_INTERVAL_MS) return
+        lastReconnectAttemptAt = now
+
+        if (idleMs < WATCHDOG_HARD_RECONNECT_AFTER_MS) {
+            Log.w(TAG, "Watchdog: live view idle ${idleMs}ms -- coba restart polling (soft retry)")
+            onSessionError?.invoke("Live view macet, mencoba menyambungkan ulang...")
+            // Kemungkinan cuma chain polling onLiveViewData yang berhenti (mis.
+            // postDelayed sempat tertunda lama saat CPU dibatasi Doze), bukan
+            // sesi USB-nya -- coba cara paling murah dulu: re-issue live view.
+            camera?.setLiveView(true)
+        } else {
+            Log.w(TAG, "Watchdog: live view idle ${idleMs}ms -- reconnect penuh (hard retry)")
+            onSessionError?.invoke("Live view masih macet, membuka ulang sesi kamera...")
+            // Sesi USB dianggap mati (percobaan soft di atas tidak memulihkan
+            // apa pun dalam WATCHDOG_HARD_RECONNECT_AFTER_MS) -- buka ulang dari
+            // awal. Intent kosong = sama seperti app dibuka manual & kamera sudah
+            // lebih dulu tersambung (lihat dokumentasi initialize() di atas):
+            // library akan mencari device kompatibel yang masih attached & minta
+            // izin USB lagi, TANPA perlu user cabut-pasang kabel.
+            liveViewActive = false
+            camera = null
+            ptpService.initialize(context, Intent(), true)
+        }
+    }
+
     /** Kirim command jepret ke kamera yang sedang aktif. Return false kalau belum ada kamera. */
     override fun capturePhoto(): Boolean {
         val cam = camera
@@ -150,6 +232,7 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
 
     /** Panggil dari onDestroy Activity supaya BroadcastReceiver tidak bocor. */
     override fun release() {
+        watchdogCancelled = true
         closeSession()
         if (isListeningDetach) {
             try {
@@ -220,6 +303,11 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
         liveViewActive = true
         currentLiveViewData = null
         previousLiveViewData = null
+        // Reset watchdog: kasih grace period penuh dari titik ini, bukan dari
+        // kapan instance ini dibuat -- supaya tidak false-positive kalau live
+        // view baru mulai (belum sempat dapat frame pertama) pas watchdog check
+        // kebetulan jalan.
+        lastLiveViewFrameAt = System.currentTimeMillis()
         camera?.getLiveViewPicture(null) // mulai polling
     }
 
@@ -230,6 +318,10 @@ class EsCameraSession(private val context: Context) : Camera.CameraListener, Cam
             camera?.getLiveViewPicture(previousLiveViewData)
             return
         }
+
+        // <-- BARU: frame (walau kosong/data non-null) berarti polling chain masih
+        // hidup & device masih merespons -- watchdog boleh tenang lagi.
+        lastLiveViewFrameAt = System.currentTimeMillis()
 
         data.bitmap?.let { onLiveViewFrame?.invoke(it) }
 
