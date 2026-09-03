@@ -78,6 +78,15 @@ class MainActivity : ComponentActivity() {
     // nampilin frameOverlayBitmap polos (tanpa foto, karena tidak ada slot untuk diisi).
     private var previewBitmap = mutableStateOf<Bitmap?>(null)
 
+    // <-- BARU: kapan terakhir kali previewBitmap di-rebuild DENGAN live view di
+    // dalamnya (lihat refreshLivePreviewSlot()). Live view kamera datang terus-
+    // menerus (bisa >10 frame/detik dari polling PTP) tapi buildPreviewImage()
+    // itu berat (alloc bitmap penuh ukuran frame + scale PNG) -- kalau dijalankan
+    // di SETIAP frame, boros CPU/GC tanpa bikin preview kelihatan lebih mulus.
+    // Jadi di-throttle ke [LIVE_PREVIEW_REFRESH_INTERVAL_MS] di sini.
+    private var lastLivePreviewRefreshAt = 0L
+    private val LIVE_PREVIEW_REFRESH_INTERVAL_MS = 120L
+
     // Hasil akhir setelah SEMUA slot terisi. Selama ini non-null, layar full menampilkan
     // hasil ini + tombol "Lanjut" — split-screen live view disembunyikan sampai user
     // menekan lanjut (yang akan reset sesi & bikin field ini balik jadi null).
@@ -422,7 +431,14 @@ class MainActivity : ComponentActivity() {
                             // seperti Stand) supaya user tetap bisa jepret.
                             showDeviceCameraShutter = developerModeEnabled.value,
                             onDeviceCameraShutterClick = { standStartCountdownAndCapture() },
-                            appearance = appearanceSettings.value
+                            appearance = appearanceSettings.value,
+                            // <-- BARU: fitur "Retake slot sebelumnya" (lihat retakeSlot()
+                            // & TemplateSessionManager.removePhotoAt/capturedPhotosSnapshot).
+                            // Dibaca langsung dari templateSession tiap recomposition (bukan
+                            // state Compose terpisah) -- cukup fresh karena screen ini sudah
+                            // sering recompose tiap ada perubahan liveViewBitmap/previewBitmap.
+                            filledSlots = templateSession?.capturedPhotosSnapshot() ?: emptyList(),
+                            onRetakeSlotClick = { order -> retakeSlot(order) }
                         )
 
                         BoothMode.STAND -> StandBoothScreen(
@@ -447,7 +463,10 @@ class MainActivity : ComponentActivity() {
                             onShutterClick = { standStartCountdownAndCapture() },
                             onRetakeClick = { standRetakePhoto() },
                             onAcceptClick = { standAcceptPhoto() },
-                            appearance = appearanceSettings.value
+                            appearance = appearanceSettings.value,
+                            // <-- BARU: lihat komentar yang sama di MobileBoothScreen di atas.
+                            filledSlots = templateSession?.capturedPhotosSnapshot() ?: emptyList(),
+                            onRetakeSlotClick = { order -> retakeSlot(order) }
                         )
 
                         // Failsafe: seharusnya tidak pernah tercapai, karena boothMode.value
@@ -550,6 +569,12 @@ class MainActivity : ComponentActivity() {
 
         backend.onLiveViewFrame = { bitmap ->
             liveViewBitmap.value = bitmap
+            // <-- BARU: ikut refresh preview kiri supaya live view juga kelihatan
+            // di slot yang akan diisi (lihat refreshLivePreviewSlot()). Callback ini
+            // bisa nyala dari thread polling kamera, bukan main thread -- tapi
+            // pattern-nya sudah konsisten dengan `liveViewBitmap.value = bitmap` di
+            // atas, jadi aman dilakukan di sini juga.
+            refreshLivePreviewSlot(bitmap)
         }
 
         backend.onSessionError = { error ->
@@ -709,6 +734,39 @@ class MainActivity : ComponentActivity() {
         } else {
             frameBmp
         }
+    }
+
+    /**
+     * <-- BARU: dipanggil dari SETIAP frame live view (lewat wireCameraCallbacks)
+     * selagi sesi capture aktif, supaya preview kiri ikut menampilkan live view
+     * kamera SAAT INI di slot kosong yang akan diisi berikutnya -- di-crop &
+     * diskalakan PERSIS seperti ukuran/posisi hasil akhir nanti (lihat
+     * TemplateSessionManager.buildPreviewImage param liveViewBitmap), jadi
+     * operator/tamu bisa lihat framing foto SEBELUM shutter ditekan.
+     *
+     * Di-skip sama sekali (tidak rebuild apa-apa) kalau: belum ada sesi/frame
+     * aktif, semua slot sudah penuh (tidak ada slot tujuan), atau layar SEDANG
+     * menampilkan review/hasil akhir (live view kanan juga tidak kelihatan di
+     * layar itu, jadi preview kiri tidak perlu ikut update). Selain itu, ada
+     * throttle [LIVE_PREVIEW_REFRESH_INTERVAL_MS] biar tidak compose ulang
+     * bitmap penuh di SETIAP frame live view (lihat komentar di deklarasi field-nya).
+     */
+    private fun refreshLivePreviewSlot(liveFrame: Bitmap) {
+        val session = templateSession ?: return
+        if (session.isComplete) return
+        val frameBmp = frameOverlayBitmap.value ?: return
+        if (standReviewBitmap.value != null || finalResultBitmap.value != null) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastLivePreviewRefreshAt < LIVE_PREVIEW_REFRESH_INTERVAL_MS) return
+        lastLivePreviewRefreshAt = now
+
+        previewBitmap.value = session.buildPreviewImage(
+            frameBitmap = frameBmp,
+            showEmptySlotPlaceholders = true,
+            liveViewBitmap = liveFrame,
+            mirrorLiveView = sessionMirrorEnabled.value
+        )
     }
 
     /**
@@ -901,6 +959,40 @@ class MainActivity : ComponentActivity() {
     private fun standRetakePhoto() {
         standReviewBitmap.value = null
         standReviewPhotoBytes = null
+    }
+
+    /**
+     * <-- BARU: dipanggil dari dialog "Retake slot mana?" (lihat StandBoothScreen.
+     * RetakeSlotDialog / onRetakeSlotClick) begitu user pilih salah satu foto yang
+     * SUDAH ke-capture buat diambil ulang -- tidak harus slot yang paling terakhir
+     * (beda dari [standRetakePhoto] yang cuma bisa buang foto di layar review, dan
+     * beda dari fitur retake lama MOBILE yang cuma bisa buang slot TERAKHIR lewat
+     * TemplateSessionManager.removeLastPhoto).
+     *
+     * Begitu foto slot [order] dibuang, TemplateSessionManager.nextSlotOrder()
+     * otomatis balik ngarah ke situ (atau ke slot kosong lain dengan nomor lebih
+     * kecil kalau ada -- lihat catatan di [TemplateSessionManager.removePhotoAt]),
+     * jadi jepretan shutter berikutnya (fisik ATAU software) otomatis masuk ke slot
+     * yang di-retake, TANPA perlu logic pemilihan slot tambahan di tempat lain.
+     *
+     * Dijaga TIDAK bisa dipanggil selagi countdown/capture/proses lagi jalan (guard
+     * yang sama seperti tombol shutter) -- dialog pemicunya di StandBoothScreen
+     * sendiri sudah men-disable tombol 🔁 di kondisi itu, tapi guard di sini tetap
+     * dipertahankan sebagai jaring pengaman kedua (mis. kalau ada race klik ganda).
+     */
+    private fun retakeSlot(order: Int) {
+        val session = templateSession ?: return
+        if (standCountdownValue.value != null || standIsCapturing.value || standIsProcessing.value) return
+        if (standReviewBitmap.value != null) return // sedang di layar review, jangan diganggu
+
+        if (session.removePhotoAt(order)) {
+            statusText.value = "🔁 Slot $order akan diambil ulang"
+            // Preview kiri harus langsung nunjukin slot itu balik kosong (placeholder
+            // nomor / live view di slot itu kalau kebetulan jadi slot tujuan berikutnya)
+            // -- rebuild sinkron di sini (bukan nunggu frame live view berikutnya)
+            // supaya operator langsung dapat feedback visual begitu pilih slot di dialog.
+            refreshPreview()
+        }
     }
 
     /**

@@ -3,15 +3,22 @@ package com.example.roamingphotobooth.booth.stand
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -21,9 +28,15 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -78,6 +91,16 @@ fun StandBoothScreen(
     onShutterClick: () -> Unit,
     onRetakeClick: () -> Unit,
     onAcceptClick: () -> Unit,
+    // <-- BARU: fitur "Retake slot sebelumnya". [filledSlots] = daftar foto yang
+    // SUDAH ke-capture (nomor slot + thumbnail-nya, urut nomor -- lihat
+    // TemplateSessionManager.capturedPhotosSnapshot), dipakai ngisi dialog pilih
+    // slot (lihat RetakeSlotDialog di bawah). [onRetakeSlotClick] dipanggil dengan
+    // nomor slot yang user pilih dari dialog itu -- MainActivity yang tanggung
+    // jawab buang foto slot itu (lewat TemplateSessionManager.removePhotoAt) &
+    // bikin nextSlotOrder() balik ngarah ke situ. Default kosong/no-op supaya
+    // pemanggil lama yang belum diupdate tetap kompilasi.
+    filledSlots: List<Pair<Int, Bitmap>> = emptyList(),
+    onRetakeSlotClick: (Int) -> Unit = {},
     // <-- BARU: kontrol tombol shutter DI LAYAR. Default true (perilaku Stand
     // asli, tidak berubah). Mobile dengan kamera eksternal set ini FALSE karena
     // capture dipicu lewat tombol fisik di kamera, bukan lewat app — lihat
@@ -145,6 +168,14 @@ fun StandBoothScreen(
                     appearance = appearance
                 )
 
+                // <-- BARU: tombol "Retake slot sebelumnya" -- pojok kanan atas, sejajar
+                // dgn tombol lain. Cuma aktif kalau ada minimal 1 foto yang sudah
+                // ke-capture DAN tidak lagi ada capture/proses/countdown berjalan
+                // (jangan sampai user buka dialog pilih slot pas kamera lagi nembak).
+                var showRetakeDialog by remember { mutableStateOf(false) }
+                val retakeEnabled = filledSlots.isNotEmpty() &&
+                    countdownValue == null && !isCapturing && !isProcessing
+
                 // Tombol back/setting + toggle Mirror — pojok kanan atas, sejajar.
                 Row(
                     modifier = Modifier
@@ -154,6 +185,16 @@ fun StandBoothScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     MirrorToggle(checked = mirrorEnabled, onCheckedChange = onMirrorToggle)
+                    IconButton(
+                        onClick = { showRetakeDialog = true },
+                        enabled = retakeEnabled
+                    ) {
+                        Text(
+                            text = "🔁",
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = if (retakeEnabled) Color.White else Color.White.copy(alpha = 0.35f)
+                        )
+                    }
                     if (showSettingsButton) {
                         IconButton(onClick = onSettingsClick) {
                             // <-- BERUBAH: dulu emoji "⚙️", sekarang diseragamkan
@@ -173,6 +214,17 @@ fun StandBoothScreen(
                             color = Color.White
                         )
                     }
+                }
+
+                if (showRetakeDialog) {
+                    RetakeSlotDialog(
+                        filledSlots = filledSlots,
+                        onDismiss = { showRetakeDialog = false },
+                        onSlotSelected = { order ->
+                            showRetakeDialog = false
+                            onRetakeSlotClick(order)
+                        }
+                    )
                 }
             }
         }
@@ -384,6 +436,75 @@ private fun ReviewContent(
                 )
             }
         }
+    }
+}
+
+/**
+ * <-- BARU: dialog "Retake slot mana?" -- muncul begitu tombol 🔁 di pojok kanan
+ * atas layar capture ditekan. Nampilin semua foto yang SUDAH ke-capture sejauh ini
+ * sebagai deretan thumbnail bernomor (bisa di-scroll horizontal kalau slot-nya
+ * banyak); tap salah satu = pilih slot itu buat di-retake (foto lama dibuang,
+ * jepretan berikutnya masuk ke slot itu lagi -- lihat
+ * TemplateSessionManager.removePhotoAt & MainActivity.retakeSlot). Tidak ada
+ * konfirmasi tambahan setelah tap thumbnail -- dialog ini SENDIRI sudah jadi langkah
+ * konfirmasi (user harus sengaja buka dialog dulu lewat tombol 🔁), jadi menambah
+ * satu langkah lagi cuma bikin alurnya lebih lambat tanpa nambah keamanan berarti.
+ */
+@Composable
+private fun RetakeSlotDialog(
+    filledSlots: List<Pair<Int, Bitmap>>,
+    onDismiss: () -> Unit,
+    onSlotSelected: (Int) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Retake foto slot mana?") },
+        text = {
+            Column {
+                Text(
+                    text = "Pilih salah satu foto di bawah untuk diambil ulang. " +
+                        "Foto lama di slot itu akan diganti dengan jepretan baru.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    items(filledSlots, key = { it.first }) { (order, bitmap) ->
+                        RetakeSlotThumbnail(
+                            order = order,
+                            bitmap = bitmap,
+                            onClick = { onSlotSelected(order) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Batal")
+            }
+        }
+    )
+}
+
+@Composable
+private fun RetakeSlotThumbnail(order: Int, bitmap: Bitmap, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "Foto slot $order",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .size(84.dp)
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(8.dp))
+        )
+        Text(
+            text = "Slot $order",
+            style = MaterialTheme.typography.labelSmall
+        )
     }
 }
 

@@ -63,7 +63,11 @@ fun MobileBoothScreen(
     // <-- BARU: diteruskan apa adanya ke StandBoothScreen -- dipakai untuk
     // tombol shutter (tampilan disamakan dengan tombol Mulai) & kontrol
     // tampil/sembunyi kotak status (lihat AppearanceSettings.showStatusText).
-    appearance: AppearanceSettings = AppearanceSettings()
+    appearance: AppearanceSettings = AppearanceSettings(),
+    // <-- BARU: fitur "Retake slot sebelumnya", diteruskan apa adanya ke
+    // StandBoothScreen (lihat dokumentasi param-nya di sana).
+    filledSlots: List<Pair<Int, Bitmap>> = emptyList(),
+    onRetakeSlotClick: (Int) -> Unit = {}
 ) {
     StandBoothScreen(
         status = status,
@@ -87,6 +91,8 @@ fun MobileBoothScreen(
         showShutterButton = showDeviceCameraShutter,
         showSettingsButton = true,
         onSettingsClick = onSettingsClick,
-        appearance = appearance
+        appearance = appearance,
+        filledSlots = filledSlots,
+        onRetakeSlotClick = onRetakeSlotClick
     )
 }

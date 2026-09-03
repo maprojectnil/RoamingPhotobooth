@@ -135,6 +135,31 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
     }
 
     /**
+     * <-- BARU: buang foto pada slot SPESIFIK [order] -- beda dari [removeLastPhoto]
+     * yang cuma bisa buang slot TERAKHIR. Dipakai fitur "Retake slot sebelumnya":
+     * user pilih salah satu foto yang SUDAH ke-capture (lewat dialog pilih slot di
+     * layar capture, lihat StandBoothScreen.RetakeSlotDialog) buat diulang, tidak
+     * harus yang paling baru.
+     *
+     * Begitu dipanggil, [nextSlotOrder] otomatis balik nunjuk ke slot kosong dengan
+     * NOMOR TERKECIL -- yang biasanya (tapi tidak selalu) berarti slot [order] itu
+     * sendiri. CATATAN: kalau kebetulan ada slot lain dengan nomor LEBIH KECIL dari
+     * [order] yang juga masih kosong (mis. sesi belum selesai & user retake slot 3
+     * padahal slot 1 belum sempat kefoto), jepretan berikutnya akan diarahkan ke
+     * slot 1 dulu, BUKAN ke slot 3 yang baru di-retake -- ini konsisten dengan alur
+     * pengisian normal (selalu urut dari nomor terkecil), bukan bug.
+     *
+     * Return `true` kalau memang ada foto yang dibuang di slot itu, `false` kalau
+     * slot [order] belum ada fotonya sama sekali (tidak ada yang bisa di-retake).
+     */
+    fun removePhotoAt(order: Int): Boolean {
+        val removed = capturedPhotos.remove(order) ?: return false
+        removed.recycle()
+        Log.i(TAG, "Foto slot $order dibuang (retake per-slot). Progress: $filledSlots/$totalSlots")
+        return true
+    }
+
+    /**
      * Gabungkan semua foto ke posisi slot masing-masing, ditumpuk DI BAWAH frame PNG.
      * Hasil akhir berukuran sama dengan frame asli (frameWidthPx x frameHeightPx).
      * Mensyaratkan semua slot sudah terisi (dipakai untuk hasil akhir yang disimpan).
@@ -157,16 +182,45 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
      * - `true` (dipakai mode STAND): slot kosong digambar sebagai kotak berwarna
      *   bernomor (nomor = urutan foto, warna sama = slot duplikat/foto yang sama)
      *   supaya operator langsung tahu status tiap slot dari layar preview kiri.
+     *
+     * [liveViewBitmap]: <-- BARU. Kalau diisi (non-null), frame live view kamera
+     * SAAT INI digambar ke dalam slot KOSONG BERIKUTNYA (== [nextSlotOrder]) --
+     * di-crop & diskalakan PERSIS seperti foto hasil capture nanti (cover-fit,
+     * lihat [drawPhotoCoverFit]/[drawLiveViewCoverFit]), jadi operator/tamu bisa
+     * lihat framing yang akan ke-capture SEBELUM shutter ditekan, bukan cuma kotak
+     * placeholder nomor. Slot lain yang masih kosong tetap pakai placeholder biasa
+     * (kalau [showEmptySlotPlaceholders] true) -- cuma slot TUJUAN berikutnya yang
+     * diganti live view. Kalau semua slot sudah penuh ([nextSlotOrder] null) atau
+     * [liveViewBitmap] null, behavior sama seperti sebelumnya (tidak ada perubahan).
+     *
+     * [mirrorLiveView]: ikutin setting Mirror Camera sesi berjalan (lihat
+     * MainActivity.sessionMirrorEnabled) supaya arah live view yang ditampilkan di
+     * slot ini KONSISTEN dengan live view besar di kanan (yang di-mirror lewat
+     * Modifier.scale di StandBoothScreen) dan dengan foto hasil capture beneran
+     * (yang di-mirror di [addPhoto]) -- tanpa ini, preview slot akan kelihatan
+     * "kebalik" dibanding apa yang user lihat & apa yang akan tersimpan.
      */
-    fun buildPreviewImage(frameBitmap: Bitmap, showEmptySlotPlaceholders: Boolean = false): Bitmap {
-        return buildComposite(frameBitmap, showEmptySlotPlaceholders)
+    fun buildPreviewImage(
+        frameBitmap: Bitmap,
+        showEmptySlotPlaceholders: Boolean = false,
+        liveViewBitmap: Bitmap? = null,
+        mirrorLiveView: Boolean = false
+    ): Bitmap {
+        return buildComposite(frameBitmap, showEmptySlotPlaceholders, liveViewBitmap, mirrorLiveView)
     }
 
     /**
      * Layer compositing inti: gambar foto-foto yang SUDAH ADA (partial atau lengkap)
-     * di posisi slotnya masing-masing, lalu tumpuk frame PNG di atasnya.
+     * di posisi slotnya masing-masing -- ATAU live view kamera di slot tujuan
+     * berikutnya kalau [liveViewBitmap] diisi (lihat [buildPreviewImage]) -- lalu
+     * tumpuk frame PNG di atasnya.
      */
-    private fun buildComposite(frameBitmap: Bitmap, showEmptySlotPlaceholders: Boolean): Bitmap {
+    private fun buildComposite(
+        frameBitmap: Bitmap,
+        showEmptySlotPlaceholders: Boolean,
+        liveViewBitmap: Bitmap? = null,
+        mirrorLiveView: Boolean = false
+    ): Bitmap {
         val resultWidth = template.frameWidthPx
         val resultHeight = template.frameHeightPx
 
@@ -183,14 +237,25 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
             emptyMap()
         }
 
+        // Slot KOSONG berikutnya yang bakal diisi jepretan selanjutnya -- cuma dipakai
+        // kalau ada live view untuk ditampilkan di situ (lihat param [liveViewBitmap]
+        // di [buildPreviewImage]). null kalau tidak ada live view ATAU semua slot
+        // sudah penuh (behavior lama, tidak ada slot yang diganti live view).
+        val liveTargetSlotOrder = if (liveViewBitmap != null) nextSlotOrder() else null
+
         // Layer 1: gambar tiap foto yang sudah ter-capture di posisi slotnya (bawah).
         // Kalau [showEmptySlotPlaceholders] true (mode STAND), slot yang BELUM ada
         // fotonya digambar sebagai kotak placeholder berwarna dengan nomor urutnya
         // di tengah. Kalau false (mode MOBILE, behavior lama), slot kosong dilewati
-        // sama sekali alias tetap transparan.
+        // sama sekali alias tetap transparan. PENGECUALIAN: slot TUJUAN berikutnya
+        // ([liveTargetSlotOrder]) SELALU digambar kalau live view tersedia, terlepas
+        // dari [showEmptySlotPlaceholders] -- live view di slot tujuan itu sendiri
+        // yang jadi indikator "slot ini yang akan diisi", jadi tetap relevan di
+        // kedua mode.
         for (slot in template.slots) {
             val photo = capturedPhotos[slot.order]
-            if (photo == null && !showEmptySlotPlaceholders) continue
+            val isLiveTargetSlot = photo == null && slot.order == liveTargetSlotOrder
+            if (photo == null && !isLiveTargetSlot && !showEmptySlotPlaceholders) continue
 
             val destRect = Rect(
                 (slot.xRatio * resultWidth).toInt(),
@@ -199,6 +264,16 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
                 ((slot.yRatio + slot.heightRatio) * resultHeight).toInt()
             )
 
+            fun drawSlotContent() {
+                when {
+                    photo != null -> drawPhotoCoverFit(canvas, photo, destRect, paint)
+                    isLiveTargetSlot -> drawLiveViewCoverFit(
+                        canvas, liveViewBitmap!!, destRect, paint, mirrorLiveView
+                    )
+                    else -> drawEmptySlotPlaceholder(canvas, slot, destRect, rankMap)
+                }
+            }
+
             if (slot.rotationDegrees != 0f) {
                 canvas.save()
                 canvas.rotate(
@@ -206,18 +281,10 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
                     destRect.centerX().toFloat(),
                     destRect.centerY().toFloat()
                 )
-                if (photo != null) {
-                    drawPhotoCoverFit(canvas, photo, destRect, paint)
-                } else {
-                    drawEmptySlotPlaceholder(canvas, slot, destRect, rankMap)
-                }
+                drawSlotContent()
                 canvas.restore()
             } else {
-                if (photo != null) {
-                    drawPhotoCoverFit(canvas, photo, destRect, paint)
-                } else {
-                    drawEmptySlotPlaceholder(canvas, slot, destRect, rankMap)
-                }
+                drawSlotContent()
             }
         }
 
@@ -310,6 +377,47 @@ class TemplateSessionManager(private val template: PhotoTemplate) {
         canvas.save()
         canvas.clipRect(destRect)
         canvas.drawBitmap(photo, null, drawRect, paint)
+        canvas.restore()
+    }
+
+    /**
+     * <-- BARU. Sama persis seperti [drawPhotoCoverFit] (cover-fit: skala terbesar
+     * dari skala lebar/tinggi, crop merata dari tengah di sisi yang kelebihan) --
+     * dipakai KHUSUS untuk gambar frame live view kamera ke slot tujuan berikutnya
+     * (lihat [buildComposite]/[buildPreviewImage]), supaya crop yang kelihatan di
+     * preview PERSIS sama dengan crop yang bakal dipakai di foto hasil akhir nanti.
+     * Bedanya cuma dukungan [mirror]: kalau true, gambar di-flip horizontal
+     * DI SEKITAR TITIK TENGAH [destRect] (bukan titik tengah bitmap live view),
+     * supaya crop cover-fit-nya tetap benar sebelum di-flip.
+     */
+    private fun drawLiveViewCoverFit(
+        canvas: Canvas,
+        liveFrame: Bitmap,
+        destRect: Rect,
+        paint: Paint,
+        mirror: Boolean
+    ) {
+        val destWidth = destRect.width().toFloat()
+        val destHeight = destRect.height().toFloat()
+        if (destWidth <= 0f || destHeight <= 0f || liveFrame.width <= 0 || liveFrame.height <= 0) return
+
+        val scaleX = destWidth / liveFrame.width.toFloat()
+        val scaleY = destHeight / liveFrame.height.toFloat()
+        val scale = maxOf(scaleX, scaleY)
+
+        val scaledWidth = liveFrame.width * scale
+        val scaledHeight = liveFrame.height * scale
+
+        val drawLeft = destRect.left + (destWidth - scaledWidth) / 2f
+        val drawTop = destRect.top + (destHeight - scaledHeight) / 2f
+        val drawRect = RectF(drawLeft, drawTop, drawLeft + scaledWidth, drawTop + scaledHeight)
+
+        canvas.save()
+        canvas.clipRect(destRect)
+        if (mirror) {
+            canvas.scale(-1f, 1f, destRect.centerX().toFloat(), destRect.centerY().toFloat())
+        }
+        canvas.drawBitmap(liveFrame, null, drawRect, paint)
         canvas.restore()
     }
 }
