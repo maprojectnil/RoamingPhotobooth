@@ -1004,6 +1004,20 @@ class MainActivity : ComponentActivity() {
 
     private fun saveMergedBitmap(bitmap: Bitmap): String {
         val fileName = "photobooth_${System.currentTimeMillis()}.jpg"
+
+        // <-- FIX: nama subfolder sesi (dipakai DriveUploadWorker kalau setting
+        // "Folder Terpisah per Sesi" ON, lihat SessionSettings.createSessionFolder).
+        // Sebelumnya TIDAK PERNAH dibuat/dikirim sama sekali -> toggle-nya di
+        // Settings > Session tidak berefek apa-apa ke hasil upload (selalu masuk
+        // rata ke folder dasar). saveMergedBitmap() dipanggil TEPAT SEKALI per
+        // sesi selesai (1 sesi = 1 foto hasil akhir template, lihat komentar di
+        // SessionSettings.kt), jadi generate di sini sudah pas -> tiap sesi dapat
+        // nama folder unik sendiri. Format & contoh nama disamakan dengan yang
+        // sudah tertulis di SessionSettingsScreen ("Sesi_2026-08-31_14-05-30").
+        val sessionFolderName = java.text.SimpleDateFormat(
+            "'Sesi_'yyyy-MM-dd_HH-mm-ss",
+            java.util.Locale.getDefault()
+        ).format(java.util.Date())
         val jpegBytes = java.io.ByteArrayOutputStream().use { baos ->
             bitmap.compress(Bitmap.CompressFormat.JPEG, 92, baos)
             baos.toByteArray()
@@ -1054,9 +1068,60 @@ class MainActivity : ComponentActivity() {
         val cacheFile = java.io.File(cacheDir, "upload_$slug.jpg")
         cacheFile.writeBytes(jpegBytes)
 
-        enqueueDriveUpload(slug, fileName, cacheFile.absolutePath)
+        enqueueDriveUpload(slug, fileName, cacheFile.absolutePath, sessionFolderName)
+
+        // <-- FIX: kalau "Folder Terpisah per Sesi" ON, ikut upload semua foto
+        // MENTAH per-slot (belum di-merge/di-frame) ke folder sesi yang SAMA.
+        // TemplateSessionManager.capturedPhotosSnapshot() sudah disiapkan dari
+        // awal khusus untuk ini (lihat komentarnya), tapi sebelumnya TIDAK PERNAH
+        // dipanggil sama sekali -> subfolder sesi cuma kebagian 1 foto hasil
+        // merge, foto aslinya tidak pernah ikut ter-upload. templateSession masih
+        // pegang foto-fotonya di titik ini karena reset() baru terjadi nanti di
+        // startNewSession() (setelah user tekan "Lanjut" di layar hasil).
+        if (sessionSettings.value.createSessionFolder) {
+            enqueueRawSlotUploads(mergedSlug = slug, sessionFolderName = sessionFolderName)
+        }
 
         return fileName
+    }
+
+    /**
+     * Upload semua foto MENTAH (per-slot, belum di-merge/di-frame) dari sesi yang
+     * baru saja selesai ke folder sesi Drive yang SAMA dengan foto hasil merge
+     * (lihat saveMergedBitmap). Cuma dipanggil kalau setting "Folder Terpisah per
+     * Sesi" ON -- kalau OFF percuma, tidak ada folder sesi tempat foto-foto ini
+     * mau dikelompokkan bareng.
+     *
+     * Tiap foto di-upload dengan skipStatusTracking=true: tidak perlu slug/QR/
+     * tracking Firestore sendiri (yang di-track cuma status foto hasil merge,
+     * karena itu yang landing page-nya ditunggu tamu) -- foto-foto ini cukup ikut
+     * nampang di folder sesi yang sama supaya operator/tamu bisa pilih atau cetak
+     * ulang salah satu foto aslinya.
+     */
+    private fun enqueueRawSlotUploads(mergedSlug: String, sessionFolderName: String) {
+        val rawPhotos = templateSession?.capturedPhotosSnapshot() ?: return
+        for ((slotOrder, photo) in rawPhotos) {
+            val rawFileName = "slot_${slotOrder}_${System.currentTimeMillis()}.jpg"
+            val rawBytes = java.io.ByteArrayOutputStream().use { baos ->
+                photo.compress(Bitmap.CompressFormat.JPEG, 92, baos)
+                baos.toByteArray()
+            }
+            // Slug unik per foto mentah (bukan buat QR/tracking, cuma dipakai
+            // sebagai key unik WorkManager & nama file cache) -- diturunkan dari
+            // slug foto hasil merge + nomor slot, supaya gampang ditelusuri kalau
+            // perlu debug log upload mana yang gagal.
+            val rawSlug = "${mergedSlug}_slot$slotOrder"
+            val rawCacheFile = java.io.File(cacheDir, "upload_$rawSlug.jpg")
+            rawCacheFile.writeBytes(rawBytes)
+
+            enqueueDriveUpload(
+                slug = rawSlug,
+                fileName = rawFileName,
+                filePath = rawCacheFile.absolutePath,
+                sessionFolderName = sessionFolderName,
+                skipStatusTracking = true
+            )
+        }
     }
 
     /**
@@ -1064,8 +1129,21 @@ class MainActivity : ComponentActivity() {
      * backoff eksponensial, dan nunggu sampai ada koneksi internet kalau lagi
      * offline (constraint NetworkType.CONNECTED) -- tidak perlu polling manual.
      * unique work key = slug, supaya foto yang sama tidak ke-enqueue dobel.
+     *
+     * @param sessionFolderName nama subfolder sesi (lihat saveMergedBitmap) --
+     *   selalu dikirim, tapi DriveUploadWorker cuma benar-benar PAKAI ini kalau
+     *   setting "Folder Terpisah per Sesi" (SessionSettings.createSessionFolder)
+     *   lagi ON -- lihat DriveUploadWorker.doWork().
+     * @param skipStatusTracking true untuk foto MENTAH per-slot (lihat
+     *   [enqueueRawSlotUploads]) yang tidak perlu tracking status Firestore.
      */
-    private fun enqueueDriveUpload(slug: String, fileName: String, filePath: String) {
+    private fun enqueueDriveUpload(
+        slug: String,
+        fileName: String,
+        filePath: String,
+        sessionFolderName: String? = null,
+        skipStatusTracking: Boolean = false
+    ) {
         val constraints = androidx.work.Constraints.Builder()
             .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
             .build()
@@ -1078,7 +1156,13 @@ class MainActivity : ComponentActivity() {
                 java.util.concurrent.TimeUnit.MILLISECONDS
             )
             .setInputData(
-                com.example.roamingphotobooth.work.buildUploadInputData(slug, fileName, filePath)
+                com.example.roamingphotobooth.work.buildUploadInputData(
+                    slug = slug,
+                    fileName = fileName,
+                    filePath = filePath,
+                    sessionFolderName = sessionFolderName,
+                    skipStatusTracking = skipStatusTracking
+                )
             )
             .build()
 

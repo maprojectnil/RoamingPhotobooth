@@ -1,11 +1,14 @@
 package com.example.roamingphotobooth.drive
 
 import android.util.Log
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Upload byte JPEG langsung ke folder Drive tertentu lewat Drive REST API v3
@@ -16,6 +19,27 @@ class DriveUploader(
     private val auth: DriveAuth,
     private val folderId: String
 ) {
+    companion object {
+        // <-- FIX: 1 sesi sekarang di-upload lewat BEBERAPA job WorkManager
+        // terpisah yang jalan hampir bersamaan (1 foto hasil merge + N foto
+        // per-slot, lihat MainActivity.enqueueRawSlotUploads) dengan
+        // sessionFolderName yang SAMA persis. Tiap job bikin instance
+        // DriveUploader sendiri-sendiri (lihat DriveUploadWorker.doWork), jadi
+        // lock-nya WAJIB di level companion object (dibagi lintas instance),
+        // bukan instance field -- kalau tidak, tetap race seperti sebelumnya.
+        //
+        // Tanpa lock ini: resolveSessionFolderId() pola-nya "cari dulu, kalau
+        // belum ada baru bikin" -- kalau 2+ job cek BARENGAN sebelum salah satu
+        // sempat selesai bikin foldernya, Drive TIDAK melarang folder dengan
+        // nama sama dibuat dobel -> tiap job "menang" bikin folder sendiri ->
+        // foto 1 sesi kepencar ke beberapa folder yang namanya sama persis.
+        //
+        // Key = "<folderId dasar>::<nama folder sesi>" supaya lock-nya spesifik
+        // per kombinasi folder dasar + nama sesi (jaga-jaga kalau suatu saat ada
+        // multi-akun/multi-folder dasar dalam 1 proses app yang sama).
+        private val sessionFolderLocks = ConcurrentHashMap<String, Mutex>()
+    }
+
     /**
      * @param fileId id file di Drive (dipakai kalau perlu operasi lanjutan).
      * @param shareUrl link langsung ke foto, siap di-encode jadi QR — hanya bisa
@@ -80,15 +104,29 @@ class DriveUploader(
     /**
      * Cari subfolder bernama [sessionFolderName] di dalam folder dasar ([folderId]).
      * Kalau belum ada, buat baru. Kalau sudah ada (mis. worker ini di-retry setelah
-     * folder sempat berhasil dibuat sebelumnya), pakai ulang id yang sama -> TIDAK
-     * bikin folder duplikat tiap kali WorkManager retry upload yang gagal.
+     * folder sempat berhasil dibuat sebelumnya, ATAU job LAIN dari sesi yang sama
+     * sudah lebih dulu bikin foldernya), pakai ulang id yang sama -> TIDAK bikin
+     * folder duplikat.
      *
-     * BLOCKING -> panggil dari Dispatchers.IO, sama seperti [uploadBytes].
+     * DIKUNCI per (folderId dasar + sessionFolderName) lewat [sessionFolderLocks]:
+     * job-job lain dari sesi yang SAMA yang jalan bersamaan akan ANTRE nunggu
+     * giliran di sini (bukan sama-sama cek+bikin barengan) -> yang pertama selesai
+     * bikin/nemuin foldernya, sisanya tinggal nemuin folder yang sudah ada itu.
+     * Job dari sesi yang BEDA (nama folder beda) tidak saling nunggu -- lock-nya
+     * per key, bukan global.
+     *
+     * suspend (bukan blocking biasa) karena pakai Mutex coroutine -- tetap aman
+     * dipanggil dari Dispatchers.IO seperti [uploadBytes], HTTP call di dalamnya
+     * tetap blocking seperti sebelumnya, cuma exclusion-nya sekarang lewat coroutine.
      */
-    fun resolveSessionFolderId(sessionFolderName: String): String {
-        val accessToken = auth.fetchAccessToken()
-        return findFolderByName(sessionFolderName, accessToken)
-            ?: createFolder(sessionFolderName, accessToken)
+    suspend fun resolveSessionFolderId(sessionFolderName: String): String {
+        val lockKey = "$folderId::$sessionFolderName"
+        val mutex = sessionFolderLocks.computeIfAbsent(lockKey) { Mutex() }
+        return mutex.withLock {
+            val accessToken = auth.fetchAccessToken()
+            findFolderByName(sessionFolderName, accessToken)
+                ?: createFolder(sessionFolderName, accessToken)
+        }
     }
 
     private fun findFolderByName(name: String, accessToken: String): String? {
