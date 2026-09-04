@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -22,14 +23,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.CollectionsBookmark
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Image as ImageIcon
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +50,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +69,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+
 /**
  * Layar editor bingkai — SELALU landscape (dipaksa lewat AndroidManifest supaya
  * proporsi 70/30 di bawah ini konsisten & workspace dapat ruang maksimal).
@@ -72,7 +82,12 @@ import androidx.compose.ui.unit.dp
 fun TemplateEditorScreen(
     viewModel: TemplateEditorViewModel,
     onPickFrameClick: () -> Unit,
-    onSaveClick: () -> Unit
+    onSaveClick: () -> Unit,
+    // Dipanggil dengan pesan singkat (Bahasa Indonesia, siap tampil) setiap kali
+    // "Deteksi Otomatis Slot" selesai dijalankan (berhasil ATAU gagal) — layar ini
+    // sengaja tidak nge-Toast sendiri (Composable murni, tanpa Context/Activity),
+    // jadi pemanggil (TemplateEditorActivity) yang tampilkan lewat Toast.
+    onAutoDetectResult: (String) -> Unit = {}
 ) {
     Row(
         modifier = Modifier
@@ -95,6 +110,7 @@ fun TemplateEditorScreen(
             viewModel = viewModel,
             onPickFrameClick = onPickFrameClick,
             onSaveClick = onSaveClick,
+            onAutoDetectResult = onAutoDetectResult,
             modifier = Modifier
                 .weight(0.32f)
                 .fillMaxHeight()
@@ -294,8 +310,52 @@ private fun ControlPanel(
     viewModel: TemplateEditorViewModel,
     onPickFrameClick: () -> Unit,
     onSaveClick: () -> Unit,
+    onAutoDetectResult: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Dialog konfirmasi sebelum Deteksi Otomatis MENIMPA slot yang sudah ada —
+    // cuma muncul kalau daftar slot sekarang tidak kosong (lihat pemanggilannya di
+    // tombol "Deteksi Otomatis Slot" di bawah).
+    var showOverwriteConfirm by remember { mutableStateOf(false) }
+
+    fun runAutoDetect() {
+        val result = viewModel.autoDetectSlots()
+        val message = when (result) {
+            is AutoDetectResult.Success ->
+                "Deteksi otomatis berhasil: ${result.slotCount} slot ditemukan dari bolongan bingkai. " +
+                        "Cek & sesuaikan urutan/posisi tiap slot kalau perlu."
+            AutoDetectResult.NoFrame ->
+                "Pilih bingkai PNG dulu sebelum pakai deteksi otomatis."
+            AutoDetectResult.NoHolesFound ->
+                "Tidak ada bolongan transparan yang terdeteksi di PNG ini. Pastikan bingkai " +
+                        "punya area transparan (bukan solid) di tempat foto seharusnya muncul."
+        }
+        onAutoDetectResult(message)
+    }
+
+    if (showOverwriteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showOverwriteConfirm = false },
+            title = { Text("Timpa slot yang sudah ada?") },
+            text = {
+                Text(
+                    "Ada ${viewModel.slots.size} slot yang sudah dibuat. Deteksi Otomatis akan " +
+                            "menghapus semuanya dan menggantinya dengan slot baru hasil pembacaan " +
+                            "bolongan PNG. Lanjutkan?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showOverwriteConfirm = false
+                    runAutoDetect()
+                }) { Text("Lanjutkan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showOverwriteConfirm = false }) { Text("Batal") }
+            }
+        )
+    }
+
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(20.dp),
@@ -340,6 +400,28 @@ private fun ControlPanel(
                 Icon(imageVector = Icons.Filled.ImageIcon, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(if (viewModel.framePath.value == null) "Pilih Bingkai PNG" else "Ganti Bingkai PNG")
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Deteksi Otomatis Slot: baca bolongan (area transparan) di PNG bingkai
+            // lalu bikin slot foto otomatis dari situ — user tetap bisa geser/resize/
+            // ubah urutan/duplikat/hapus hasilnya seperti slot manual biasa (lihat
+            // catatan di TemplateEditorViewModel.autoDetectSlots).
+            OutlinedButton(
+                onClick = {
+                    if (viewModel.slots.isNotEmpty()) {
+                        showOverwriteConfirm = true
+                    } else {
+                        runAutoDetect()
+                    }
+                },
+                enabled = viewModel.framePath.value != null,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(imageVector = Icons.Filled.AutoFixHigh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Deteksi Otomatis Slot")
             }
 
             Spacer(modifier = Modifier.height(18.dp))
@@ -412,8 +494,13 @@ private fun ControlPanel(
                 viewModel.slots.forEachIndexed { index, slot ->
                     val shared = (orderCounts[slot.order] ?: 0) > 1
                     SlotListRow(
-                        label = "Slot ${index + 1} (foto #${slot.order})",
+                        index = index,
+                        slot = slot,
+                        allSlots = viewModel.slots,
                         shared = shared,
+                        onSwapOrderWith = { otherIndex -> viewModel.swapSlotOrder(index, otherIndex) },
+                        onDuplicateFrom = { otherIndex -> viewModel.setSlotSource(index, otherIndex) },
+                        onMakeUnique = { viewModel.makeSlotUnique(index) },
                         onDuplicateClick = { viewModel.duplicateSlot(index) },
                         onDeleteClick = { viewModel.removeSlotAt(index) }
                     )
@@ -476,43 +563,163 @@ private fun SnapToggleRow(
     }
 }
 
+/**
+ * 1 baris di "Daftar Slot" untuk slot di [index] (posisi di bingkai TIDAK pernah
+ * berubah lewat baris ini — semua aksi di sini cuma memanipulasi `order`, tidak
+ * pernah xRatio/yRatio/widthRatio/heightRatio):
+ *
+ * - Baris 1: label slot + tombol "buat slot baru dari sini" (salin kotak) + hapus.
+ * - Baris 2: nomor urut foto slot ini sekarang (`Foto #N`), dikasih tanda kalau lagi
+ *   berbagi foto dengan slot lain (hasil "Sumber Foto" / auto-detect yang ditimpa).
+ * - Baris 3: dua aksi utama fitur reorder & duplicate-tanpa-slot-baru:
+ *     - **Tukar**: pilih slot lain dari dropdown -> `order` KEDUA slot saling
+ *       bertukar (reorder murni, posisi tetap).
+ *     - **Sumber**: pilih slot lain dari dropdown -> slot INI ikut memakai `order`
+ *       slot yang dipilih (jadi "duplikat" tanpa bikin kotak baru, posisi tetap).
+ * - Kalau lagi berbagi foto (shared), muncul tombol "Lepas" buat balikin slot ini
+ *   ke `order` unik miliknya sendiri lagi.
+ */
 @Composable
 private fun SlotListRow(
-    label: String,
+    index: Int,
+    slot: PhotoSlot,
+    allSlots: List<PhotoSlot>,
     shared: Boolean,
+    onSwapOrderWith: (Int) -> Unit,
+    onDuplicateFrom: (Int) -> Unit,
+    onMakeUnique: () -> Unit,
     onDuplicateClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
+    var showSwapMenu by remember { mutableStateOf(false) }
+    var showSourceMenu by remember { mutableStateOf(false) }
+
+    // Daftar slot LAIN (bukan diri sendiri) buat opsi di dropdown Tukar/Sumber —
+    // dihitung ulang tiap kali daftar slot berubah (nama/urutan slot lain bisa
+    // berubah tanpa row ini ikut di-recompose sendiri kalau tidak di-key ke allSlots).
+    val otherSlots = remember(allSlots, index) {
+        allSlots.mapIndexedNotNull { i, s -> if (i != index) i to s else null }
+    }
+
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = if (shared) Color(0xFF3A2A26) else Color(0xFF2E323C),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 10.dp, vertical = 6.dp)
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = Color(0xFFE4E6EA),
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onDuplicateClick) {
-                Icon(
-                    imageVector = Icons.Filled.ContentCopy,
-                    contentDescription = "Duplikat slot",
-                    tint = Color(0xFF4DD0E1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Slot ${index + 1}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFE4E6EA),
+                    modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = onDuplicateClick) {
+                    Icon(
+                        imageVector = Icons.Filled.ContentCopy,
+                        contentDescription = "Buat slot baru (salin kotak dari slot ini)",
+                        tint = Color(0xFF4DD0E1)
+                    )
+                }
+                IconButton(onClick = onDeleteClick) {
+                    Icon(
+                        imageVector = Icons.Filled.Delete,
+                        contentDescription = "Hapus slot",
+                        tint = Color(0xFFEF5350)
+                    )
+                }
             }
-            IconButton(onClick = onDeleteClick) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Hapus slot",
-                    tint = Color(0xFFEF5350)
-                )
+
+            Text(
+                text = if (shared) "Foto #${slot.order} • berbagi foto dgn slot lain" else "Foto #${slot.order}",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (shared) Color(0xFFFF7A59) else Color(0xFF9AA0AC)
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Tukar Urutan — reorder murni: order slot INI & slot yang dipilih
+                // saling bertukar, posisi/ukuran keduanya tidak tersentuh.
+                Box(modifier = Modifier.weight(1f)) {
+                    TextButton(
+                        onClick = { showSwapMenu = true },
+                        enabled = otherSlots.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Filled.SwapHoriz, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Tukar", style = MaterialTheme.typography.labelSmall)
+                    }
+                    DropdownMenu(expanded = showSwapMenu, onDismissRequest = { showSwapMenu = false }) {
+                        Text(
+                            text = "Tukar urutan foto dengan:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF9AA0AC),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                        otherSlots.forEach { (otherIndex, otherSlot) ->
+                            DropdownMenuItem(
+                                text = { Text("Slot ${otherIndex + 1} (foto #${otherSlot.order})") },
+                                onClick = {
+                                    showSwapMenu = false
+                                    onSwapOrderWith(otherIndex)
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Sumber Foto — duplicate TANPA bikin slot baru: order slot INI
+                // ditimpa jadi sama dengan slot yang dipilih, posisi/ukuran tetap.
+                Box(modifier = Modifier.weight(1f)) {
+                    TextButton(
+                        onClick = { showSourceMenu = true },
+                        enabled = otherSlots.isNotEmpty(),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("Sumber", style = MaterialTheme.typography.labelSmall)
+                    }
+                    DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
+                        Text(
+                            text = "Pakai foto dari:",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF9AA0AC),
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                        otherSlots.forEach { (otherIndex, otherSlot) ->
+                            DropdownMenuItem(
+                                text = { Text("Slot ${otherIndex + 1} (foto #${otherSlot.order})") },
+                                onClick = {
+                                    showSourceMenu = false
+                                    onDuplicateFrom(otherIndex)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (shared) {
+                TextButton(
+                    onClick = onMakeUnique,
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                ) {
+                    Icon(imageVector = Icons.Filled.LinkOff, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text("Lepas (pakai foto sendiri lagi)", style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }

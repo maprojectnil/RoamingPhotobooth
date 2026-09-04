@@ -5,6 +5,21 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 
+/**
+ * Hasil pemanggilan [TemplateEditorViewModel.autoDetectSlots] — dipakai layar editor
+ * buat nampilin pesan yang sesuai (Toast) tanpa ViewModel perlu tahu soal Context/UI.
+ */
+sealed class AutoDetectResult {
+    /** Berhasil, [slotCount] bolongan terdeteksi & jadi slot baru. */
+    data class Success(val slotCount: Int) : AutoDetectResult()
+
+    /** Belum ada bingkai PNG yang dipilih sama sekali. */
+    object NoFrame : AutoDetectResult()
+
+    /** Ada bingkai, tapi tidak ada bolongan transparan yang cukup besar ditemukan. */
+    object NoHolesFound : AutoDetectResult()
+}
+
 class TemplateEditorViewModel : ViewModel() {
 
     var templateName = mutableStateOf("")
@@ -88,6 +103,88 @@ class TemplateEditorViewModel : ViewModel() {
         if (index in slots.indices) {
             slots[index] = updated
         }
+    }
+
+    /**
+     * REORDER: tukar `order` (nomor urut pengambilan foto) antara slot [indexA] dan
+     * [indexB] — posisi & ukuran (bounding box) KEDUA slot SAMA SEKALI TIDAK berubah,
+     * cuma nomor urut fotonya yang saling bertukar tempat.
+     *
+     * Contoh: urutan fisik slot di bingkai tetap 1→2→3→4→5→6, tapi kalau slot ke-3 &
+     * ke-4 di-`swapSlotOrder`, urutan PENGAMBILAN FOTO jadi 1→2→4→3→5→6 — slot yang
+     * tadinya nomor 3 sekarang minta foto ke-4, dan sebaliknya, tanpa slot-nya sendiri
+     * pindah posisi di bingkai.
+     */
+    fun swapSlotOrder(indexA: Int, indexB: Int) {
+        if (indexA !in slots.indices || indexB !in slots.indices || indexA == indexB) return
+        val a = slots[indexA]
+        val b = slots[indexB]
+        slots[indexA] = a.copy(order = b.order)
+        slots[indexB] = b.copy(order = a.order)
+    }
+
+    /**
+     * DUPLICATE (tanpa bikin slot baru): jadikan slot di [index] "berbagi" foto dengan
+     * slot [sourceIndex] — `order` slot [index] ditimpa dengan `order` milik
+     * [sourceIndex], sehingga otomatis keisi foto yang SAMA saat sesi pemotretan
+     * (lihat catatan di [PhotoSlot.order]). Posisi & ukuran slot [index] TIDAK
+     * berubah — beda dengan [duplicateSlot] yang bikin kotak BARU, fungsi ini cuma
+     * mengubah PEMETAAN foto pada slot yang SUDAH ADA.
+     *
+     * Contoh: "Slot 6 → Duplikat dari Slot 3" -> slot 6 tetap di posisi/bentuknya
+     * semula, tapi sekarang otomatis terisi foto yang sama dengan slot 3.
+     */
+    fun setSlotSource(index: Int, sourceIndex: Int) {
+        if (index !in slots.indices || sourceIndex !in slots.indices || index == sourceIndex) return
+        val sourceOrder = slots[sourceIndex].order
+        slots[index] = slots[index].copy(order = sourceOrder)
+    }
+
+    /**
+     * Lepaskan slot di [index] dari status "berbagi foto" (kebalikan dari
+     * [setSlotSource]) — dikasih `order` UNIK baru (lanjut dari order terbesar yang
+     * ada sekarang), supaya slot ini kembali minta fotonya sendiri saat sesi
+     * pemotretan. Posisi & ukuran slot TIDAK berubah.
+     */
+    fun makeSlotUnique(index: Int) {
+        if (index !in slots.indices) return
+        val nextOrder = (slots.maxOfOrNull { it.order } ?: 0) + 1
+        slots[index] = slots[index].copy(order = nextOrder)
+    }
+
+    /**
+     * Fitur "Deteksi Otomatis Slot": scan bingkai PNG yang sedang aktif buat cari
+     * bolongan (area transparan) lewat [FrameSlotDetector], lalu MENIMPA seluruh
+     * daftar `slots` sekarang dengan slot baru — 1 slot per bolongan yang ditemukan,
+     * `order` diisi berurutan sesuai reading order (baris atas→bawah, kiri→kanan)
+     * sebagai tebakan awal.
+     *
+     * Ini aksi DESTRUKTIF terhadap slot manual yang sudah ada — pemanggil (layar
+     * editor) bertanggung jawab minta konfirmasi user dulu kalau `slots` sebelumnya
+     * tidak kosong. Hasil deteksi (posisi, ukuran, & terutama urutan) cuma tebakan
+     * awal — user tetap bebas geser/resize/ubah urutan/duplikat/hapus tiap slot
+     * hasilnya persis seperti slot yang dibuat manual, karena bentuknya memang
+     * [PhotoSlot] biasa, tidak ditandai spesial.
+     */
+    fun autoDetectSlots(): AutoDetectResult {
+        val bitmap = frameBitmap.value ?: return AutoDetectResult.NoFrame
+        val holes = FrameSlotDetector.detectHoles(bitmap)
+        if (holes.isEmpty()) return AutoDetectResult.NoHolesFound
+
+        slots.clear()
+        holes.forEachIndexed { index, hole ->
+            slots.add(
+                PhotoSlot(
+                    id = "slot_${System.currentTimeMillis()}_auto_${index + 1}",
+                    order = index + 1,
+                    xRatio = hole.xRatio,
+                    yRatio = hole.yRatio,
+                    widthRatio = hole.widthRatio,
+                    heightRatio = hole.heightRatio
+                )
+            )
+        }
+        return AutoDetectResult.Success(holes.size)
     }
 
     fun buildTemplate(): PhotoTemplate? {

@@ -82,6 +82,9 @@ class TemplateEditorActivity : ComponentActivity() {
                     templates = templateStorage.loadAllTemplates()
                     showEditor = false
                     viewModel.reset()
+                },
+                onAutoDetectResult = { message ->
+                    android.widget.Toast.makeText(this@TemplateEditorActivity, message, android.widget.Toast.LENGTH_LONG).show()
                 }
             )
         } else {
