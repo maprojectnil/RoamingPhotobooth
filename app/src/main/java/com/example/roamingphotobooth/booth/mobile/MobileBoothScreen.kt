@@ -38,6 +38,9 @@ fun MobileBoothScreen(
     previewBitmap: Bitmap?,
     finalResultBitmap: Bitmap?,
     qrCodeBitmap: Bitmap?,
+    // <-- BARU: diteruskan apa adanya ke StandBoothScreen -- lihat dokumentasi
+    // param-nya di sana.
+    gifBytes: ByteArray? = null,
     countdownValue: Int?,
     isCapturing: Boolean,
     isProcessing: Boolean,
@@ -75,6 +78,7 @@ fun MobileBoothScreen(
         previewBitmap = previewBitmap,
         finalResultBitmap = finalResultBitmap,
         qrCodeBitmap = qrCodeBitmap,
+        gifBytes = gifBytes,
         countdownValue = countdownValue,
         isCapturing = isCapturing,
         isProcessing = isProcessing,

@@ -52,8 +52,17 @@ class DriveUploader(
      *   yang sudah diatur lewat Settings/gradle.properties). Isi dengan id folder
      *   sesi (lihat [resolveSessionFolderId]) kalau foto ini mau masuk ke subfolder
      *   sesi, bukan langsung ke folder dasar.
+     * @param mimeType Content-Type file yang diupload. Default "image/jpeg" (semua
+     *   foto hasil merge & foto mentah per-slot) -- <-- BARU: dipakai juga untuk
+     *   upload GIF hasil sesi (lihat MainActivity.enqueueGifUpload), yang butuh
+     *   "image/gif" supaya Drive mengenali tipe filenya dengan benar.
      */
-    fun uploadBytes(fileName: String, jpegBytes: ByteArray, parentFolderId: String = folderId): UploadResult {
+    fun uploadBytes(
+        fileName: String,
+        jpegBytes: ByteArray,
+        parentFolderId: String = folderId,
+        mimeType: String = "image/jpeg"
+    ): UploadResult {
         val accessToken = auth.fetchAccessToken()
 
         val metadata = JSONObject().apply {
@@ -76,7 +85,7 @@ class DriveUploader(
             out.write("Content-Type: application/json; charset=UTF-8\r\n\r\n".toByteArray())
             out.write(metadata.toString().toByteArray())
             out.write("\r\n--$boundary\r\n".toByteArray())
-            out.write("Content-Type: image/jpeg\r\n\r\n".toByteArray())
+            out.write("Content-Type: $mimeType\r\n\r\n".toByteArray())
             out.write(jpegBytes)
             out.write("\r\n--$boundary--".toByteArray())
         }

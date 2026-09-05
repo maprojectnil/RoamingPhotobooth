@@ -97,6 +97,15 @@ class MainActivity : ComponentActivity() {
     // jalan di background (layar nampilin status "menyiapkan QR" sampai ini terisi).
     private var qrCodeBitmap = mutableStateOf<Bitmap?>(null)
 
+    // <-- BARU: fitur GIF hasil sesi -- animasi slideshow dari foto-foto MENTAH
+    // (tanpa frame) yang baru saja di-capture, dibuat sekali begitu sesi selesai
+    // (lihat saveMergedBitmap -> PhotoGifBuilder.build). Ditampilkan berdampingan
+    // dengan hasil foto berframe di FinalResultScreen (preview kecil), dan
+    // diupload ke Drive dengan ketentuan yang SAMA seperti upload foto mentah
+    // per-slot (lihat enqueueGifUpload). Null selama belum ada sesi selesai, atau
+    // kalau foto mentahnya kurang dari 2 (tidak ada gunanya dianimasikan).
+    private var finalResultGifBytes = mutableStateOf<ByteArray?>(null)
+
     // <-- BARU: fitur Galeri — riwayat LOKAL sesi foto yang sudah selesai (lihat
     // package .gallery). galleryEntries di-refresh dari galleryRepository setiap
     // kali user membuka AppScreen.GALLERY (bukan realtime -- cukup, karena entri
@@ -399,6 +408,7 @@ class MainActivity : ComponentActivity() {
                             previewBitmap = previewBitmap.value,
                             finalResultBitmap = finalResultBitmap.value,
                             qrCodeBitmap = qrCodeBitmap.value,
+                            gifBytes = finalResultGifBytes.value,
                             // Tampilan Mobile disamakan dengan Stand -- lihat MobileBoothScreen &
                             // StandBoothScreen. State countdown/isCapturing/isProcessing/reviewBitmap
                             // di sini dipakai BERSAMA dengan Stand (lihat deklarasi standXxx di atas),
@@ -447,6 +457,7 @@ class MainActivity : ComponentActivity() {
                             previewBitmap = previewBitmap.value,
                             finalResultBitmap = finalResultBitmap.value,
                             qrCodeBitmap = qrCodeBitmap.value,
+                            gifBytes = finalResultGifBytes.value,
                             countdownValue = standCountdownValue.value,
                             isCapturing = standIsCapturing.value,
                             isProcessing = standIsProcessing.value,
@@ -703,6 +714,7 @@ class MainActivity : ComponentActivity() {
         frameOverlayBitmap.value = frameBmp
         finalResultBitmap.value = null
         qrCodeBitmap.value = null
+        finalResultGifBytes.value = null
         // Sesi baru -> pakai default Mirror dari Settings > Session (bisa
         // di-override lagi per-sesi lewat toggle di Session Preview).
         sessionMirrorEnabled.value = sessionSettings.value.mirrorCamera
@@ -777,6 +789,7 @@ class MainActivity : ComponentActivity() {
         templateSession?.reset()
         finalResultBitmap.value = null
         qrCodeBitmap.value = null
+        finalResultGifBytes.value = null
         // Sesi baru -> balik ke default Mirror dari Settings > Session, buang
         // override per-sesi sebelumnya (contoh di spesifikasi: sesi berikutnya
         // tetap pakai default meski sesi sebelumnya sempat diubah manual).
@@ -1132,8 +1145,19 @@ class MainActivity : ComponentActivity() {
             BuildConfig.LANDING_BASE_URL, slug
         )
         val qr = com.example.roamingphotobooth.util.QrCodeGenerator.generate(landingUrl)
+
+        // <-- BARU: fitur GIF hasil sesi -- dibuat dari foto-foto MENTAH (tanpa
+        // frame) sesi yang baru saja selesai (lihat PhotoGifBuilder). WAJIB dibuat
+        // DI SINI (sebelum sesi di-reset lewat startNewSession()) karena
+        // templateSession baru benar-benar dikosongkan begitu user tekan "Lanjut"
+        // -- di titik ini fotonya masih lengkap. null kalau raw photo-nya kurang
+        // dari 2 (mis. template 1 slot) -- tidak ada gunanya dianimasikan.
+        val rawPhotosForGif = templateSession?.capturedPhotosSnapshot() ?: emptyList()
+        val gifBytes = com.example.roamingphotobooth.gif.PhotoGifBuilder.build(rawPhotosForGif)
+
         runOnUiThread {
             qrCodeBitmap.value = qr
+            finalResultGifBytes.value = gifBytes
             statusText.value = "✅ Tersimpan: $fileName — mengunggah ke Drive di latar belakang..."
         }
 
@@ -1172,6 +1196,15 @@ class MainActivity : ComponentActivity() {
         // startNewSession() (setelah user tekan "Lanjut" di layar hasil).
         if (sessionSettings.value.createSessionFolder) {
             enqueueRawSlotUploads(mergedSlug = slug, sessionFolderName = sessionFolderName)
+        }
+
+        // <-- BARU: upload GIF hasil sesi (kalau ada -- lihat gifBytes di atas)
+        // mengikuti KETENTUAN YANG SAMA PERSIS dengan upload foto mentah per-slot:
+        // cuma diupload kalau "Folder Terpisah per Sesi" ON, masuk ke folder sesi
+        // yang SAMA, dan skipStatusTracking=true (bukan foto utama yang QR/landing
+        // page-nya ditunggu tamu, jadi tidak perlu tracking status Firestore sendiri).
+        if (sessionSettings.value.createSessionFolder && gifBytes != null) {
+            enqueueGifUpload(mergedSlug = slug, gifBytes = gifBytes, sessionFolderName = sessionFolderName)
         }
 
         return fileName
@@ -1217,6 +1250,31 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * <-- BARU: upload GIF hasil sesi ke folder sesi Drive yang SAMA dengan foto
+     * hasil merge & foto mentah per-slot (lihat saveMergedBitmap/enqueueRawSlotUploads).
+     * Cuma dipanggil kalau setting "Folder Terpisah per Sesi" ON DAN [gifBytes]
+     * berhasil dibuat -- KETENTUANNYA SENGAJA DISAMAKAN PERSIS dengan
+     * [enqueueRawSlotUploads]: skipStatusTracking=true (bukan foto utama yang
+     * QR/landing page-nya ditunggu tamu, jadi tidak perlu slug/tracking Firestore
+     * sendiri), cukup ikut nampang di folder sesi yang sama.
+     */
+    private fun enqueueGifUpload(mergedSlug: String, gifBytes: ByteArray, sessionFolderName: String) {
+        val gifFileName = "photobooth_${mergedSlug}.gif"
+        val gifSlug = "${mergedSlug}_gif"
+        val gifCacheFile = java.io.File(cacheDir, "upload_$gifSlug.gif")
+        gifCacheFile.writeBytes(gifBytes)
+
+        enqueueDriveUpload(
+            slug = gifSlug,
+            fileName = gifFileName,
+            filePath = gifCacheFile.absolutePath,
+            sessionFolderName = sessionFolderName,
+            skipStatusTracking = true,
+            mimeType = "image/gif"
+        )
+    }
+
+    /**
      * Enqueue job upload ke Drive lewat WorkManager: retry otomatis dengan
      * backoff eksponensial, dan nunggu sampai ada koneksi internet kalau lagi
      * offline (constraint NetworkType.CONNECTED) -- tidak perlu polling manual.
@@ -1227,14 +1285,18 @@ class MainActivity : ComponentActivity() {
      *   setting "Folder Terpisah per Sesi" (SessionSettings.createSessionFolder)
      *   lagi ON -- lihat DriveUploadWorker.doWork().
      * @param skipStatusTracking true untuk foto MENTAH per-slot (lihat
-     *   [enqueueRawSlotUploads]) yang tidak perlu tracking status Firestore.
+     *   [enqueueRawSlotUploads]) atau GIF hasil sesi (lihat [enqueueGifUpload])
+     *   yang tidak perlu tracking status Firestore.
+     * @param mimeType Content-Type file ini -- default "image/jpeg" (foto hasil
+     *   merge & foto mentah per-slot), "image/gif" untuk [enqueueGifUpload].
      */
     private fun enqueueDriveUpload(
         slug: String,
         fileName: String,
         filePath: String,
         sessionFolderName: String? = null,
-        skipStatusTracking: Boolean = false
+        skipStatusTracking: Boolean = false,
+        mimeType: String = "image/jpeg"
     ) {
         val constraints = androidx.work.Constraints.Builder()
             .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
@@ -1253,7 +1315,8 @@ class MainActivity : ComponentActivity() {
                     fileName = fileName,
                     filePath = filePath,
                     sessionFolderName = sessionFolderName,
-                    skipStatusTracking = skipStatusTracking
+                    skipStatusTracking = skipStatusTracking,
+                    mimeType = mimeType
                 )
             )
             .build()

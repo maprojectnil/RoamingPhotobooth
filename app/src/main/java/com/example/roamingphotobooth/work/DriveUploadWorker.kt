@@ -48,6 +48,12 @@ class DriveUploadWorker(
         // status foto hasil merge, karena itu yang landing page-nya ditunggu user).
         // WorkManager tetap urus retry/offline-nya sama seperti upload foto utama.
         const val KEY_SKIP_STATUS_TRACKING = "skip_status_tracking"
+        // <-- BARU: Content-Type file yang diupload. Selalu dikirim dari
+        // buildUploadInputData (default "image/jpeg" -- semua upload lama tidak
+        // berubah perilakunya). Dipakai supaya file GIF hasil sesi (lihat
+        // MainActivity.enqueueGifUpload) ke-upload dengan mimetype "image/gif" yang
+        // benar, bukan ikut dianggap image/jpeg begitu saja.
+        const val KEY_MIME_TYPE = "mime_type"
         private const val MAX_ATTEMPTS = 8
         private const val TAG = "DriveUploadWorker"
     }
@@ -57,6 +63,7 @@ class DriveUploadWorker(
         val fileName = inputData.getString(KEY_FILE_NAME) ?: return@withContext Result.failure()
         val filePath = inputData.getString(KEY_FILE_PATH) ?: return@withContext Result.failure()
         val skipStatusTracking = inputData.getBoolean(KEY_SKIP_STATUS_TRACKING, false)
+        val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
         val file = File(filePath)
 
         val statusRepo = PhotoStatusRepository(
@@ -101,11 +108,11 @@ class DriveUploadWorker(
                 null
             }
 
-            val jpegBytes = file.readBytes()
+            val fileBytes = file.readBytes()
             val result = if (sessionFolderId != null) {
-                uploader.uploadBytes(fileName, jpegBytes, sessionFolderId)
+                uploader.uploadBytes(fileName, fileBytes, sessionFolderId, mimeType)
             } else {
-                uploader.uploadBytes(fileName, jpegBytes)
+                uploader.uploadBytes(fileName, fileBytes, mimeType = mimeType)
             }
 
             if (!skipStatusTracking) {
@@ -174,13 +181,17 @@ class DriveUploadWorker(
  * @param skipStatusTracking true untuk foto MENTAH (per-slot, belum di-merge) yang
  *   ikut diupload ke folder sesi -- tidak perlu tracking status Firestore, lihat
  *   [DriveUploadWorker.KEY_SKIP_STATUS_TRACKING].
+ * @param mimeType Content-Type file ini -- default "image/jpeg" (tidak mengubah
+ *   perilaku upload foto lama). Isi "image/gif" untuk upload GIF hasil sesi, lihat
+ *   MainActivity.enqueueGifUpload.
  */
 fun buildUploadInputData(
     slug: String,
     fileName: String,
     filePath: String,
     sessionFolderName: String? = null,
-    skipStatusTracking: Boolean = false
+    skipStatusTracking: Boolean = false,
+    mimeType: String = "image/jpeg"
 ): Data =
     Data.Builder()
         .putString(DriveUploadWorker.KEY_SLUG, slug)
@@ -188,4 +199,5 @@ fun buildUploadInputData(
         .putString(DriveUploadWorker.KEY_FILE_PATH, filePath)
         .putString(DriveUploadWorker.KEY_SESSION_FOLDER_NAME, sessionFolderName)
         .putBoolean(DriveUploadWorker.KEY_SKIP_STATUS_TRACKING, skipStatusTracking)
+        .putString(DriveUploadWorker.KEY_MIME_TYPE, mimeType)
         .build()

@@ -76,6 +76,13 @@ fun StandBoothScreen(
     previewBitmap: Bitmap?,
     finalResultBitmap: Bitmap?,
     qrCodeBitmap: Bitmap?,
+    // <-- BARU: byte GIF89a animasi slideshow dari foto-foto mentah (tanpa frame)
+    // sesi yang baru selesai (lihat MainActivity.saveMergedBitmap ->
+    // PhotoGifBuilder). Null selama belum ada sesi selesai, atau kalau foto
+    // mentahnya kurang dari 2 (tidak ada gunanya dianimasikan) -- diteruskan apa
+    // adanya ke FinalResultScreen. Default null supaya pemanggil lama yang belum
+    // diupdate (mis. galeri recall) tetap kompilasi.
+    gifBytes: ByteArray? = null,
     countdownValue: Int?,
     isCapturing: Boolean,
     isProcessing: Boolean,
@@ -131,6 +138,7 @@ fun StandBoothScreen(
                 FinalResultScreen(
                     resultBitmap = finalResultBitmap,
                     qrCodeBitmap = qrCodeBitmap,
+                    gifBytes = gifBytes,
                     onContinueClick = onContinueClick
                 )
             }

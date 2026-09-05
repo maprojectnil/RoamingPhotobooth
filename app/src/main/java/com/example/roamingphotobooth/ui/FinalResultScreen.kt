@@ -12,6 +12,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.roamingphotobooth.network.PrintServerClient
 import com.example.roamingphotobooth.ui.theme.RoamingPhotoboothTheme
 import java.io.File
@@ -107,7 +109,14 @@ fun FinalResultScreen(
     resultBitmap: Bitmap,
     qrCodeBitmap: Bitmap?,
     onContinueClick: () -> Unit,
-    mode: FinalResultMode = FinalResultMode.SESSION_END
+    mode: FinalResultMode = FinalResultMode.SESSION_END,
+    // <-- BARU: byte GIF89a animasi slideshow dari foto-foto ASLI (tanpa frame)
+    // sesi ini -- lihat MainActivity.saveMergedBitmap -> PhotoGifBuilder. Null
+    // selama belum ada (mis. sesi belum selesai, mode GALLERY_RECALL yang tidak
+    // menyimpan GIF-nya secara lokal, atau foto mentahnya kurang dari 2). Kalau
+    // ada, ditampilkan sebagai preview kecil berdampingan dengan hasil foto
+    // berframe -- lihat [GifPreviewCard].
+    gifBytes: ByteArray? = null
 ) {
     val primaryIcon = if (mode == FinalResultMode.GALLERY_RECALL) Icons.Filled.ArrowBack else Icons.Filled.ArrowForward
     val primaryDescription = if (mode == FinalResultMode.GALLERY_RECALL) "Kembali ke Galeri" else "Lanjut (Sesi Baru)"
@@ -128,6 +137,12 @@ fun FinalResultScreen(
         // portrait jadi kegedean. Pakai sisi terpendek supaya ukurannya tetap
         // proporsional & konsisten pas layar diputar.
         val buttonSize = minOf(maxWidth, maxHeight) * 0.07f
+
+        // <-- BARU: ukuran preview GIF SENGAJA dipatok kecil (proporsional ke sisi
+        // terpendek layar, sama pola dengan buttonSize di atas, tapi dibatasi
+        // maksimal 140dp) supaya tidak mengganggu/menutupi hasil foto berframe yang
+        // tetap jadi konten utama layar ini.
+        val gifPreviewSize = (minOf(maxWidth, maxHeight) * 0.22f).coerceAtMost(140.dp)
 
         var showQrPopup by remember { mutableStateOf(false) }
 
@@ -221,6 +236,22 @@ fun FinalResultScreen(
             }
         }
 
+        // <-- BARU: preview kecil animasi GIF (slideshow foto-foto ASLI tanpa
+        // frame), ditumpuk di pojok kiri-atas layar -- berdampingan dengan hasil
+        // foto berframe yang tetap jadi konten utama, di landscape maupun portrait
+        // (pojok ini selalu kosong di kedua layout, tidak menutupi tombol ikon
+        // ataupun foto hasil). Cuma dirender kalau [gifBytes] tersedia -- lihat
+        // dokumentasi param-nya di atas.
+        if (gifBytes != null) {
+            GifPreviewCard(
+                gifBytes = gifBytes,
+                size = gifPreviewSize,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(16.dp)
+            )
+        }
+
         // <-- BARU: popup QR beranimasi, ditumpuk di atas layout manapun
         // (landscape/portrait) karena ditaruh sebagai child terakhir di
         // BoxWithConstraints ini. Muncul dengan fade + scale-in, hilang
@@ -283,6 +314,72 @@ private fun CircleIconButton(
                 tint = iconTint,
                 modifier = Modifier.size(size * 0.55f)
             )
+        }
+    }
+}
+
+/**
+ * <-- BARU: kartu preview kecil animasi GIF (slideshow foto-foto ASLI tanpa
+ * frame dari sesi ini, lihat MainActivity.saveMergedBitmap -> PhotoGifBuilder).
+ * Pakai [AndroidView] + ImageDecoder/AnimatedImageDrawable bawaan Android (API
+ * 28+, Android 9) supaya animasinya jalan tanpa perlu nambah library GIF pihak
+ * ketiga (mis. Coil/Glide) -- di device API 26-27 (minSdk app ini), fallback
+ * cuma menampilkan frame PERTAMA GIF-nya secara statis (ImageDecoder/
+ * AnimatedImageDrawable belum ada di API itu), tidak crash ataupun kosong.
+ */
+@Composable
+private fun GifPreviewCard(gifBytes: ByteArray, size: Dp, modifier: Modifier = Modifier) {
+    Surface(
+        color = Color.Black,
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier
+            .size(size)
+            .border(2.dp, Color.White.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    android.widget.ImageView(context).apply {
+                        scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    }
+                },
+                // update(...) dipanggil ulang tiap [gifBytes] berubah (recomposition
+                // key-nya otomatis mengikuti parameter lambda ini) -- di app ini
+                // gifBytes cuma di-set sekali per sesi (lihat MainActivity), jadi
+                // dalam praktiknya cuma jalan 1x per kemunculan layar ini.
+                update = { imageView ->
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                        val source = android.graphics.ImageDecoder.createSource(
+                            java.nio.ByteBuffer.wrap(gifBytes)
+                        )
+                        val drawable = android.graphics.ImageDecoder.decodeDrawable(source)
+                        imageView.setImageDrawable(drawable)
+                        (drawable as? android.graphics.drawable.Animatable)?.start()
+                    } else {
+                        // Fallback API < 28 -- lihat catatan di dokumentasi composable ini.
+                        val staticBitmap = android.graphics.BitmapFactory.decodeByteArray(
+                            gifBytes, 0, gifBytes.size
+                        )
+                        imageView.setImageBitmap(staticBitmap)
+                    }
+                }
+            )
+
+            // Label kecil "GIF" di pojok, sekadar penanda supaya jelas beda dari
+            // hasil foto berframe di sebelahnya.
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                shape = RoundedCornerShape(bottomEnd = 8.dp),
+                modifier = Modifier.align(Alignment.TopStart)
+            ) {
+                Text(
+                    text = "GIF",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }
